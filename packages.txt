@@ -1,0 +1,3 @@
+ffmpeg
+fonts-noto
+fonts-dejavu
