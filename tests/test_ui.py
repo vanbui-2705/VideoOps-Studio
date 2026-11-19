@@ -2,12 +2,22 @@
 
 import gradio as gr
 
-from app import create_ui
+from app import create_runtime_ui, create_ui
 
 
 def test_create_ui_returns_blocks_without_dependencies() -> None:
     """The UI shell can be composed before production adapters exist."""
     demo = create_ui()
+
+    assert isinstance(demo, gr.Blocks)
+
+
+def test_runtime_ui_falls_back_when_channel_backend_configuration_is_invalid(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///unsafe.db")
+
+    demo = create_runtime_ui()
 
     assert isinstance(demo, gr.Blocks)
 
@@ -27,3 +37,39 @@ def test_ui_exposes_the_four_operator_workspaces() -> None:
         "Review & Publish",
         "Channel & Credentials",
     }
+
+
+class _EmptyCatalog:
+    def list(self):
+        return ()
+
+
+def test_channel_workspace_never_renders_secret_value_input() -> None:
+    config = create_ui(channels=_EmptyCatalog()).get_config_file()
+
+    password_inputs = [
+        component
+        for component in config["components"]
+        if component["type"] == "textbox"
+        and component["props"].get("type") == "password"
+    ]
+
+    assert password_inputs == []
+
+
+def test_channel_save_button_requires_explicit_admin_gate() -> None:
+    readonly = create_ui(channels=_EmptyCatalog()).get_config_file()
+    editable = create_ui(
+        channels=_EmptyCatalog(), channel_admin_enabled=True
+    ).get_config_file()
+
+    def save_button(config):
+        return next(
+            component
+            for component in config["components"]
+            if component["type"] == "button"
+            and component["props"].get("value") == "Save Channel Profile"
+        )
+
+    assert save_button(readonly)["props"]["interactive"] is False
+    assert save_button(editable)["props"]["interactive"] is True

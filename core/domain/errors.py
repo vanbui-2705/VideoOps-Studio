@@ -45,3 +45,60 @@ class TargetAlreadyCompleted(WorkflowError):
 
 class ReconciliationRequired(WorkflowError):
     """Raised when an unknown publish result must be reconciled first."""
+
+
+class WorkQueueConflict(WorkflowError):
+    """Raised when a worker mutates work it does not currently lease."""
+
+
+class ChannelValidationError(WorkflowError):
+    """Raised when a channel profile violates a safe configuration policy."""
+
+
+class ChannelProfileNotFound(WorkflowError):
+    """Raised when a channel profile does not exist."""
+
+
+class ChannelAlreadyExists(WorkflowError):
+    """Raised when a create request reuses a channel identifier."""
+
+
+class ChannelRevisionConflict(WorkflowError):
+    """Raised when a channel update uses a stale revision."""
+
+
+class ChannelAdministrationDisabled(WorkflowError):
+    """Raised when profile mutation is disabled by deployment policy."""
+
+
+class CredentialUnavailable(WorkflowError):
+    """Raised when a referenced provider credential bundle is incomplete."""
+
+
+class UnsafeWorkspacePath(WorkflowError):
+    """Raised when a media path escapes its revision-scoped job workspace."""
+
+
+class MediaPreparationError(WorkflowError):
+    """Base class for sanitized media pipeline failures."""
+
+    code = "MEDIA_PREPARATION"
+    retryable = False
+
+
+class MediaConfigurationError(MediaPreparationError):
+    code = "MEDIA_CONFIGURATION"
+
+
+class MediaTransientError(MediaPreparationError):
+    code = "MEDIA_TRANSIENT"
+    retryable = True
+
+
+class MediaTimeoutError(MediaPreparationError):
+    code = "MEDIA_TIMEOUT"
+    retryable = True
+
+
+class MediaInvalidOutput(MediaPreparationError):
+    code = "MEDIA_INVALID_OUTPUT"

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
+from core.domain.story_models import ScriptDraft
+
 
 class JobType(str, Enum):
     """Supported production paths."""
@@ -57,6 +59,9 @@ class WorkKind(str, Enum):
 class ArtifactKind(str, Enum):
     """Artifact roles used by workflow policies."""
 
+    VOICE = "VOICE"
+    SUBTITLE = "SUBTITLE"
+    VISUAL_SOURCE = "VISUAL_SOURCE"
     PREVIEW = "PREVIEW"
     MASTER = "MASTER"
 
@@ -211,6 +216,7 @@ class VideoJob:
     progress: int = 0
     available_targets: tuple[Platform, ...] = ()
     regeneration_instructions: tuple[str, ...] = ()
+    prepared_story: ScriptDraft | None = None
 
 
 @dataclass(frozen=True, slots=True)

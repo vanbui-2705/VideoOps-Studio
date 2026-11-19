@@ -90,6 +90,11 @@ def test_worker_events_advance_job_to_review_with_preview_reference() -> None:
             expected_revision=2,
             artifact_id="preview-1",
             content_revision=1,
+            supporting_artifacts=(
+                ArtifactRef("voice-1", ArtifactKind.VOICE, 1),
+                ArtifactRef("subtitle-1", ArtifactKind.SUBTITLE, 1),
+                ArtifactRef("visual-1", ArtifactKind.VISUAL_SOURCE, 1),
+            ),
         ),
     )
 
@@ -99,6 +104,12 @@ def test_worker_events_advance_job_to_review_with_preview_reference() -> None:
     assert reviewed.status is JobStatus.AWAITING_REVIEW
     assert reviewed.preview_artifact_id == "preview-1"
     assert store.jobs["job-001"].artifacts[0].kind is ArtifactKind.PREVIEW
+    assert {item.kind for item in store.jobs["job-001"].artifacts} == {
+        ArtifactKind.PREVIEW,
+        ArtifactKind.VOICE,
+        ArtifactKind.SUBTITLE,
+        ArtifactKind.VISUAL_SOURCE,
+    }
     assert store.jobs["job-001"].revision == 3
 
 

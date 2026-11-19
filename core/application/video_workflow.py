@@ -23,6 +23,7 @@ from core.application.events import (
     PreviewRendered,
     PurgeCompleted,
     StepFailed,
+    StoryPrepared,
     TargetPublishFailed,
     TargetPublishStarted,
     TargetPublishSucceeded,
@@ -279,6 +280,7 @@ class DefaultVideoWorkflow:
             approval_snapshot=None,
             publish_targets=(),
             failure=None,
+            prepared_story=None,
             regeneration_instructions=job.regeneration_instructions
             + (command.changes,),
         )
@@ -455,6 +457,40 @@ class DefaultWorkflowProcessor:
                 self._clock.now(),
             )
             updated = replace(updated, progress=5)
+        elif isinstance(event, StoryPrepared):
+            if job.job_type is not JobType.STORY:
+                raise DomainValidationError("Story content requires a story job")
+            if event.content_revision != job.content_revision:
+                raise DomainValidationError("Prepared story content revision is stale")
+            if job.status is JobStatus.QUEUED:
+                updated = transition(
+                    job,
+                    JobStatus.INGESTING,
+                    JobPhase.STORY_PREPARATION,
+                    self._clock.now(),
+                )
+            elif job.status is JobStatus.INGESTING:
+                updated = job
+            else:
+                raise InvalidTransition("Story preparation requires queued ingestion")
+            updated = transition(
+                updated,
+                JobStatus.RENDERING_PREVIEW,
+                JobPhase.PREVIEW_RENDER,
+                self._clock.now(),
+            )
+            updated = replace(
+                updated,
+                prepared_story=event.script_draft,
+                progress=45,
+            )
+            work = (
+                WorkIntent(
+                    job_id=job.job_id,
+                    kind=WorkKind.RENDER_PREVIEW,
+                    content_revision=job.content_revision,
+                ),
+            )
         elif isinstance(event, IngestionCompleted):
             updated = transition(
                 job,
@@ -473,6 +509,18 @@ class DefaultWorkflowProcessor:
         elif isinstance(event, PreviewRendered):
             if event.content_revision != job.content_revision:
                 raise DomainValidationError("Preview content revision is stale")
+            if any(
+                artifact.content_revision != job.content_revision
+                or artifact.kind in {ArtifactKind.PREVIEW, ArtifactKind.MASTER}
+                for artifact in event.supporting_artifacts
+            ):
+                raise DomainValidationError("Preview supporting artifact is invalid")
+            artifact_ids = [
+                event.artifact_id,
+                *(item.artifact_id for item in event.supporting_artifacts),
+            ]
+            if len(artifact_ids) != len(set(artifact_ids)):
+                raise DomainValidationError("Preview artifact IDs must be unique")
             updated = transition(
                 job,
                 JobStatus.AWAITING_REVIEW,
@@ -488,7 +536,8 @@ class DefaultWorkflowProcessor:
                         kind=ArtifactKind.PREVIEW,
                         content_revision=event.content_revision,
                     ),
-                ),
+                )
+                + event.supporting_artifacts,
                 progress=60,
             )
         elif isinstance(event, MasterRendered):

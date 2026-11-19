@@ -4,9 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from typing import Protocol
 
-from core.domain.models import Platform, VideoJob, WorkflowDecision, WorkIntent
+from core.domain.models import (
+    Platform,
+    VideoJob,
+    WorkflowDecision,
+    WorkIntent,
+    WorkKind,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,3 +60,63 @@ class IdGenerator(Protocol):
     """Deterministic source of job identifiers."""
 
     def new_job_id(self) -> str: ...
+
+
+class QueueStatus(str, Enum):
+    """Infrastructure-neutral lifecycle of one durable work item."""
+
+    READY = "READY"
+    CLAIMED = "CLAIMED"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    DEAD = "DEAD"
+
+
+@dataclass(frozen=True, slots=True)
+class QueuedWork:
+    """Safe queue projection consumed by a worker runtime."""
+
+    work_id: str
+    intent: WorkIntent
+    status: QueueStatus
+    attempts: int
+    max_attempts: int
+    available_at: datetime
+    lease_owner: str | None = None
+    lease_until: datetime | None = None
+    last_error_code: str | None = None
+
+
+class WorkQueue(Protocol):
+    """Durable queue seam implemented by Module 3."""
+
+    def enqueue(self, intent: WorkIntent, max_attempts: int = 3) -> QueuedWork: ...
+
+    def get(self, work_id: str) -> QueuedWork | None: ...
+
+    def claim_next(
+        self,
+        worker_id: str,
+        lease_seconds: int,
+        supported_kinds: tuple[WorkKind, ...] | None = None,
+    ) -> QueuedWork | None: ...
+
+    def heartbeat(
+        self, work_id: str, worker_id: str, lease_seconds: int
+    ) -> QueuedWork: ...
+
+    def ack(self, work_id: str, worker_id: str) -> QueuedWork: ...
+
+    def retry(
+        self,
+        work_id: str,
+        worker_id: str,
+        error_code: str,
+        available_at: datetime,
+    ) -> QueuedWork: ...
+
+    def mark_dead(
+        self, work_id: str, worker_id: str, error_code: str
+    ) -> QueuedWork: ...
+
+    def recover_expired_leases(self, now: datetime) -> int: ...

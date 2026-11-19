@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core.domain.models import JobFailure, Platform
+from core.domain.models import ArtifactRef, JobFailure, Platform
+from core.domain.story_models import ScriptDraft
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,10 +19,18 @@ class IngestionCompleted:
 
 
 @dataclass(frozen=True, slots=True)
+class StoryPrepared:
+    expected_revision: int
+    content_revision: int
+    script_draft: ScriptDraft
+
+
+@dataclass(frozen=True, slots=True)
 class PreviewRendered:
     expected_revision: int
     artifact_id: str
     content_revision: int
+    supporting_artifacts: tuple[ArtifactRef, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +82,7 @@ class StepFailed:
 WorkflowEvent = (
     JobClaimed
     | IngestionCompleted
+    | StoryPrepared
     | PreviewRendered
     | MasterRendered
     | TargetPublishStarted
