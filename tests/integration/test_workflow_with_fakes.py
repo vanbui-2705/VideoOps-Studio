@@ -120,7 +120,11 @@ def test_story_can_reach_completed_without_real_infrastructure() -> None:
     )
     publishing = processor.apply(
         submitted.job_id,
-        MasterRendered(approved.revision, artifact_id="master-e2e"),
+        MasterRendered(
+            approved.revision,
+            artifact_id="master-e2e",
+            content_revision=1,
+        ),
     )
     purging = processor.apply(
         submitted.job_id,

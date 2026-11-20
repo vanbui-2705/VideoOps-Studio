@@ -38,6 +38,7 @@ class PreviewRendered:
 class MasterRendered:
     expected_revision: int
     artifact_id: str
+    content_revision: int
 
 
 @dataclass(frozen=True, slots=True)

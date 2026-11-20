@@ -73,3 +73,19 @@ def test_channel_save_button_requires_explicit_admin_gate() -> None:
 
     assert save_button(readonly)["props"]["interactive"] is False
     assert save_button(editable)["props"]["interactive"] is True
+
+
+def test_review_actions_start_locked_and_cancel_remains_disabled() -> None:
+    config = create_ui(review=object()).get_config_file()
+
+    buttons = {
+        component["props"].get("value"): component["props"].get("interactive")
+        for component in config["components"]
+        if component["type"] == "button"
+    }
+
+    assert buttons["Tải / Làm mới"] is True
+    assert buttons["Lưu metadata"] is False
+    assert buttons["Dựng lại"] is False
+    assert buttons["Duyệt & dựng master"] is False
+    assert buttons["Hủy job"] is False

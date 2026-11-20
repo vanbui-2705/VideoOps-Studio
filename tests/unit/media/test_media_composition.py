@@ -3,7 +3,11 @@ from pathlib import Path
 import pytest
 
 from config import AppConfig
-from core.composition import validate_media_runtime, validate_remix_runtime
+from core.composition import (
+    validate_master_settings,
+    validate_media_runtime,
+    validate_remix_runtime,
+)
 
 
 def test_media_startup_rejects_missing_binary(tmp_path: Path) -> None:
@@ -40,3 +44,16 @@ def test_remix_startup_rejects_missing_ytdlp(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="remix binary"):
         validate_remix_runtime(config)
+
+
+def test_master_startup_rejects_unsafe_profile(tmp_path: Path) -> None:
+    config = AppConfig(
+        TEMP_DIR=tmp_path,
+        MASTER_RENDER_TIMEOUT_SECONDS=0,
+        MASTER_PRESET="ultrafast",
+        MASTER_CRF=99,
+        MASTER_DURATION_TOLERANCE_MS=-1,
+    )
+
+    with pytest.raises(ValueError, match="Master render settings"):
+        validate_master_settings(config)

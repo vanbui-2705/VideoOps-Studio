@@ -79,6 +79,7 @@ class FfprobeMediaProbe:
             height=int(video["height"]) if video and video.get("height") else None,
             format_name=data.get("format", {}).get("format_name"),
             has_audio=audio is not None,
+            audio_codec=str(audio.get("codec_name") or "") if audio else None,
         )
 
 

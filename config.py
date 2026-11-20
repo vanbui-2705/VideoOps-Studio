@@ -81,6 +81,7 @@ class AppConfig:
     PREVIEW_DURATION_TOLERANCE_MS: int = 250
     MEDIA_MIN_FREE_DISK_GB: float = 0.25
     MEDIA_MAX_ATTEMPTS: int = 3
+    MEDIA_RENDER_CONCURRENCY: int = 1
 
     # Remix source ingestion and preview preparation
     YTDLP_BINARY: str = "yt-dlp"
@@ -89,6 +90,12 @@ class AppConfig:
     REMIX_MAX_SOURCES: int = 10
     REMIX_MAX_SOURCE_DURATION_SECONDS: float = 7200.0
     REMIX_DURATION_TOLERANCE_MS: int = 750
+
+    # Approved 1080p master rendering
+    MASTER_RENDER_TIMEOUT_SECONDS: float = 900.0
+    MASTER_PRESET: str = "superfast"
+    MASTER_CRF: int = 23
+    MASTER_DURATION_TOLERANCE_MS: int = 1000
 
     def ensure_directories(self) -> None:
         """Create runtime directories if they do not exist."""
@@ -156,6 +163,7 @@ def load_config() -> AppConfig:
         ),
         MEDIA_MIN_FREE_DISK_GB=float(os.getenv("MEDIA_MIN_FREE_DISK_GB", "0.25")),
         MEDIA_MAX_ATTEMPTS=int(os.getenv("MEDIA_MAX_ATTEMPTS", "3")),
+        MEDIA_RENDER_CONCURRENCY=int(os.getenv("MEDIA_RENDER_CONCURRENCY", "1")),
         YTDLP_BINARY=os.getenv("YTDLP_BINARY", "yt-dlp"),
         REMIX_DOWNLOAD_TIMEOUT_SECONDS=float(
             os.getenv("REMIX_DOWNLOAD_TIMEOUT_SECONDS", "300")
@@ -169,6 +177,14 @@ def load_config() -> AppConfig:
         ),
         REMIX_DURATION_TOLERANCE_MS=int(
             os.getenv("REMIX_DURATION_TOLERANCE_MS", "750")
+        ),
+        MASTER_RENDER_TIMEOUT_SECONDS=float(
+            os.getenv("MASTER_RENDER_TIMEOUT_SECONDS", "900")
+        ),
+        MASTER_PRESET=os.getenv("MASTER_PRESET", "superfast"),
+        MASTER_CRF=int(os.getenv("MASTER_CRF", "23")),
+        MASTER_DURATION_TOLERANCE_MS=int(
+            os.getenv("MASTER_DURATION_TOLERANCE_MS", "1000")
         ),
     )
     cfg.ensure_directories()

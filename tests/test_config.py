@@ -12,6 +12,11 @@ def test_load_config_defaults(tmp_path):
     assert Path(cfg.CHANNELS_DIR).exists()
     assert cfg.REMIX_MAX_SOURCES == 10
     assert cfg.REMIX_MAX_DOWNLOAD_BYTES == 1024 * 1024 * 1024
+    assert cfg.MASTER_RENDER_TIMEOUT_SECONDS == 900
+    assert cfg.MASTER_PRESET == "superfast"
+    assert cfg.MASTER_CRF == 23
+    assert cfg.MASTER_DURATION_TOLERANCE_MS == 1000
+    assert cfg.MEDIA_RENDER_CONCURRENCY == 1
 
 
 def test_database_secrets_are_loaded_but_hidden_from_repr(monkeypatch):

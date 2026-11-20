@@ -2,7 +2,7 @@
 
 VideoOps Studio is a cloud-oriented video production pipeline for creating AI Story and Remix previews on resource-constrained infrastructure. It combines a durable PostgreSQL workflow, isolated workers, FFmpeg media processing, and a Gradio operator interface.
 
-The current implementation reaches the human Review Gate: Story and Remix jobs can be prepared, rendered as validated 480p previews, and persisted with revision-safe artifact manifests. Master rendering, platform publishing, and final purge workers remain roadmap items.
+The current implementation includes the human Review Gate and approved master rendering. Story and Remix jobs can be reviewed, frozen at one content/channel revision, and rendered as validated 1080p masters. Platform publishing and final purge workers remain roadmap items.
 
 ## Current capabilities
 
@@ -16,8 +16,9 @@ The current implementation reaches the human Review Gate: Story and Remix jobs c
 | Story preview rendering | Implemented |
 | Public URL validation and bounded yt-dlp ingestion | Implemented |
 | Remix trim, speed, crop/fit, mirror, audio normalization, and preview | Implemented |
-| Gradio workspace and channel administration UI | Shell implemented; production workflow callbacks are still locked |
-| Master rendering, YouTube/TikTok publishing, zero-retention purge | Planned |
+| Gradio Review Gate and channel administration UI | Implemented |
+| Story/Remix approved 1080p master rendering | Implemented |
+| YouTube/TikTok publishing and zero-retention purge | Planned |
 
 ## Architecture
 
@@ -32,6 +33,10 @@ flowchart LR
     PW --> FS[Revision-scoped media workspace]
     PW --> DB
     DB --> REVIEW[Awaiting Review]
+    REVIEW -->|Approve| PW
+    PW --> MASTER[Validated 1080p master]
+    MASTER --> DB
+    DB --> PUBLISH[Durable publish intents]
 ```
 
 Core business logic is framework-independent. Gradio stays in `ui/`; domain and application code under `core/` do not import it. Long-running work is persisted before workers claim it, so UI requests do not need to remain open while media is processed.
@@ -74,7 +79,7 @@ Launch the UI:
 python app.py
 ```
 
-Gradio prints the local URL after startup. The current UI supports workspace inspection and channel-profile administration; Story/Remix submission and Review/Publish buttons remain disabled until the UI is composed with `VideoWorkflow`.
+Gradio prints the local URL after startup. With `DATABASE_URL` configured, the Review Gate loads a job by ID, validates its current preview, saves metadata, requests regeneration, and approves it for master rendering. Story/Remix submission remains a future UI wiring task.
 
 ## Configuration
 
@@ -114,7 +119,7 @@ Remix download and normalization:
 python run_remix_worker.py
 ```
 
-Shared Story/Remix preview rendering:
+Serialized Story/Remix preview and master rendering:
 
 ```powershell
 python run_preview_worker.py
@@ -126,6 +131,7 @@ The workers lease only their supported work kinds:
 PREPARE_STORY  -> run_story_worker.py
 PREPARE_REMIX  -> run_remix_worker.py
 RENDER_PREVIEW -> run_preview_worker.py
+RENDER_MASTER  -> run_preview_worker.py
 ```
 
 ## Media profiles
@@ -133,7 +139,9 @@ RENDER_PREVIEW -> run_preview_worker.py
 - Landscape preview: 854x480.
 - Portrait preview: 270x480.
 - H.264/AAC, 30 fps, `yuv420p`, `ultrafast`, and `+faststart`.
+- Approved master: 1920x1080 or 1080x1920, H.264/AAC, 30 fps, `yuv420p`, `superfast`, CRF 23, and `+faststart`.
 - At most two FFmpeg threads.
+- Exactly one media render worker replica (`MEDIA_RENDER_CONCURRENCY=1`) serializes preview and master FFmpeg work.
 - Remix sources are limited to public HTTP(S) destinations and 1080p input selection.
 - Download byte, source-count, source-duration, render-time, and disk-space limits are configurable.
 
@@ -184,6 +192,7 @@ docs/                        Requirements, design, plans, and operations guides
 - [Module 5 operations](docs/MODULE_5_OPERATIONS.md)
 - [Module 6 operations](docs/MODULE_6_OPERATIONS.md)
 - [Module 7 operations](docs/MODULE_7_OPERATIONS.md)
+- [Module 8 operations](docs/MODULE_8_OPERATIONS.md)
 
 ## Security notes
 
@@ -191,4 +200,4 @@ docs/                        Requirements, design, plans, and operations guides
 - Remix URLs reject embedded credentials, private/non-global resolved IPs, and unsafe schemes before yt-dlp runs.
 - Workspace paths are revision-contained and reject traversal or symlink escape.
 - Persisted failures and artifact metadata exclude API keys, raw signed URLs, and subprocess stderr.
-- Publishing and verified zero-retention cleanup are not implemented yet; do not treat the current Review Gate as a production publishing pipeline.
+- Master success creates durable publish intents but no platform adapter consumes them yet. Publishing and verified zero-retention cleanup are not implemented.

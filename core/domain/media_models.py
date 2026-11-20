@@ -72,6 +72,7 @@ class MediaInfo:
     height: int | None = None
     format_name: str | None = None
     has_audio: bool = False
+    audio_codec: str | None = None
 
     def __post_init__(self) -> None:
         if self.duration_ms <= 0 or not self.codec.strip():
@@ -80,6 +81,8 @@ class MediaInfo:
             raise DomainValidationError("Media dimensions are incomplete")
         if self.width is not None and (self.width <= 0 or self.height <= 0):
             raise DomainValidationError("Media dimensions are invalid")
+        if self.audio_codec is not None and not self.audio_codec.strip():
+            raise DomainValidationError("Audio codec is invalid")
 
 
 @dataclass(frozen=True, slots=True)

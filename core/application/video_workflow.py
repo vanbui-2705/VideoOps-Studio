@@ -561,6 +561,19 @@ class DefaultWorkflowProcessor:
                 progress=60,
             )
         elif isinstance(event, MasterRendered):
+            if event.content_revision != job.content_revision:
+                raise DomainValidationError("Master content revision is stale")
+            approval = job.approval_snapshot
+            if (
+                approval is None
+                or approval.content_revision != job.content_revision
+                or approval.channel_revision != job.channel_revision
+            ):
+                raise DomainValidationError("Master approval snapshot is invalid")
+            if any(
+                artifact.artifact_id == event.artifact_id for artifact in job.artifacts
+            ):
+                raise DomainValidationError("Master artifact already exists")
             updated = transition(
                 job,
                 JobStatus.PUBLISHING,

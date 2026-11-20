@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 
+import pytest
+
 from core.application.events import (
     IngestionCompleted,
     JobClaimed,
@@ -16,8 +18,9 @@ from core.application.events import (
     TargetPublishUnknown,
 )
 from core.application.video_workflow import DefaultWorkflowProcessor
-from core.domain.errors import RevisionConflict
+from core.domain.errors import DomainValidationError, RevisionConflict
 from core.domain.models import (
+    ApprovalSnapshot,
     ArtifactKind,
     ArtifactRef,
     JobFailure,
@@ -114,11 +117,19 @@ def test_worker_events_advance_job_to_review_with_preview_reference() -> None:
 
 
 def test_master_render_schedules_each_pending_publish_target() -> None:
+    approved_at = FixedClock().now()
     job = replace(
         _queued_job(),
         status=JobStatus.RENDERING_MASTER,
         phase=JobPhase.MASTER_RENDER,
         revision=4,
+        approval_snapshot=ApprovalSnapshot(
+            1,
+            0,
+            VideoMetadata(title="Approved"),
+            (Platform.YOUTUBE, Platform.TIKTOK),
+            approved_at,
+        ),
         publish_targets=(
             PublishTarget(Platform.YOUTUBE),
             PublishTarget(Platform.TIKTOK),
@@ -128,7 +139,11 @@ def test_master_render_schedules_each_pending_publish_target() -> None:
 
     view = DefaultWorkflowProcessor(store, FixedClock()).apply(
         job.job_id,
-        MasterRendered(expected_revision=4, artifact_id="master-1"),
+        MasterRendered(
+            expected_revision=4,
+            artifact_id="master-1",
+            content_revision=1,
+        ),
     )
 
     assert view.status is JobStatus.PUBLISHING
@@ -141,6 +156,53 @@ def test_master_render_schedules_each_pending_publish_target() -> None:
         Platform.TIKTOK,
     ]
     assert store.jobs[job.job_id].artifacts[-1].kind is ArtifactKind.MASTER
+
+
+def test_master_render_rejects_stale_content_revision() -> None:
+    job = replace(
+        _queued_job(),
+        status=JobStatus.RENDERING_MASTER,
+        phase=JobPhase.MASTER_RENDER,
+        revision=4,
+        approval_snapshot=ApprovalSnapshot(
+            1,
+            0,
+            VideoMetadata(title="Approved"),
+            (Platform.YOUTUBE,),
+            FixedClock().now(),
+        ),
+        publish_targets=(PublishTarget(Platform.YOUTUBE),),
+    )
+
+    with pytest.raises(DomainValidationError, match="content revision"):
+        DefaultWorkflowProcessor(FakeProcessorStore(job), FixedClock()).apply(
+            job.job_id,
+            MasterRendered(4, "master-stale", content_revision=2),
+        )
+
+
+def test_master_render_rejects_duplicate_artifact_reference() -> None:
+    job = replace(
+        _queued_job(),
+        status=JobStatus.RENDERING_MASTER,
+        phase=JobPhase.MASTER_RENDER,
+        revision=4,
+        approval_snapshot=ApprovalSnapshot(
+            1,
+            0,
+            VideoMetadata(title="Approved"),
+            (Platform.YOUTUBE,),
+            FixedClock().now(),
+        ),
+        publish_targets=(PublishTarget(Platform.YOUTUBE),),
+        artifacts=(ArtifactRef("master-1", ArtifactKind.PREVIEW, 1),),
+    )
+
+    with pytest.raises(DomainValidationError, match="already exists"):
+        DefaultWorkflowProcessor(FakeProcessorStore(job), FixedClock()).apply(
+            job.job_id,
+            MasterRendered(4, "master-1", content_revision=1),
+        )
 
 
 def test_all_publish_targets_succeeded_schedules_purge() -> None:

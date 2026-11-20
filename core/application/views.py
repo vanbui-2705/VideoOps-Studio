@@ -48,6 +48,7 @@ class JobView:
     metadata: VideoMetadata
     allowed_actions: tuple[str, ...]
     preview_artifact_id: str | None
+    available_targets: tuple[Platform, ...]
     publish_targets: tuple[PublishTargetView, ...]
     failure: FailureView | None
     progress: int
@@ -102,6 +103,7 @@ def project_job(job: VideoJob) -> JobView:
         metadata=visible_metadata,
         allowed_actions=job_actions,
         preview_artifact_id=preview_artifact_id,
+        available_targets=job.available_targets,
         publish_targets=targets,
         failure=failure,
         progress=job.progress,

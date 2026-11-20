@@ -11,6 +11,12 @@ from ui.channel_handlers import (
     load_channel_form,
     save_channel_form,
 )
+from ui.review_handlers import (
+    approve_review,
+    load_review,
+    regenerate_review,
+    save_metadata,
+)
 
 _CSS_PATH = Path(__file__).with_name("styles.css")
 _APP_CSS = _CSS_PATH.read_text(encoding="utf-8")
@@ -125,53 +131,96 @@ def _build_remix_workspace() -> None:
         )
 
 
-def _build_review_workspace() -> None:
+def _build_review_workspace(review: object | None) -> None:
+    """Build the connected review gate while cancellation remains locked."""
     _section_intro(
         "Review Gate",
-        "Kiểm tra hình, tiếng, subtitle và khóa metadata trước khi dựng master.",
+        "Kiểm tra preview và khóa metadata trước khi dựng master 1080p.",
     )
-    gr.HTML(
-        """
-        <div class="status-strip">
-          <div class="status-cell"><span class="status-label">Job</span><span class="status-value mono-copy">—</span></div>
-          <div class="status-cell"><span class="status-label">Phase</span><span class="status-value pending">Chưa có job</span></div>
-          <div class="status-cell"><span class="status-label">Revision</span><span class="status-value mono-copy">—</span></div>
-          <div class="status-cell"><span class="status-label">Targets</span><span class="status-value">Chưa chọn</span></div>
-        </div>
-        """
-    )
+    revision = gr.State(value=None)
+    with gr.Row():
+        job_id = gr.Textbox(label="Job ID", placeholder="Nhập Job ID cần review")
+        load_button = gr.Button("Tải / Làm mới", interactive=review is not None)
     with gr.Row(equal_height=False):
         with gr.Column(scale=6, elem_classes="preview-panel"):
-            gr.Video(label="Preview 480p", interactive=False, height=430)
-            gr.Textbox(
+            preview = gr.Video(label="Preview 480p", interactive=False, height=430)
+            status = gr.Textbox(
                 label="Trạng thái pipeline",
                 value="Chưa có job đang review.",
                 interactive=False,
             )
+            content_revision = gr.Textbox(
+                label="Content revision", value="—", interactive=False
+            )
         with gr.Column(scale=4, elem_classes="workspace-panel"):
-            gr.Textbox(label="Tiêu đề", placeholder="Tiêu đề video")
-            gr.Textbox(label="Mô tả", lines=5, placeholder="Mô tả video")
-            gr.Textbox(label="Tags", placeholder="tag-1, tag-2, tag-3")
+            title = gr.Textbox(label="Tiêu đề", placeholder="Tiêu đề video")
+            description = gr.Textbox(label="Mô tả", lines=5, placeholder="Mô tả video")
+            tags = gr.Textbox(label="Tags", placeholder="tag-1, tag-2")
             with gr.Row():
-                gr.Textbox(label="Category", value="28")
-                gr.Dropdown(
+                category = gr.Textbox(label="Category", value="28")
+                privacy = gr.Dropdown(
                     choices=["private", "unlisted", "public"],
                     value="private",
                     label="Privacy",
                 )
-            gr.CheckboxGroup(
-                choices=["YouTube", "TikTok"],
-                label="Nền tảng đích",
+            targets = gr.CheckboxGroup(choices=[], label="Nền tảng đích")
+            save_button = gr.Button("Lưu metadata", interactive=False)
+            changes = gr.Textbox(
+                label="Yêu cầu dựng lại", placeholder="Mô tả thay đổi cần áp dụng"
             )
             with gr.Row():
-                gr.Button("Dựng lại", interactive=False)
+                regenerate_button = gr.Button("Dựng lại", interactive=False)
                 gr.Button("Hủy job", variant="stop", interactive=False)
-            gr.Button(
-                "Duyệt & Đăng",
+            approve_button = gr.Button(
+                "Duyệt & dựng master",
                 variant="primary",
                 interactive=False,
                 elem_classes="primary-action",
             )
+
+    load_button.click(
+        lambda value: load_review(review, value),
+        inputs=[job_id],
+        outputs=[
+            preview,
+            status,
+            revision,
+            content_revision,
+            title,
+            description,
+            tags,
+            category,
+            privacy,
+            targets,
+            save_button,
+            regenerate_button,
+            approve_button,
+        ],
+    )
+    metadata_inputs = [
+        job_id,
+        revision,
+        title,
+        description,
+        tags,
+        category,
+        privacy,
+    ]
+    save_button.click(
+        lambda *values: save_metadata(review, *values),
+        inputs=metadata_inputs,
+        outputs=[status, revision],
+    )
+    regenerate_button.click(
+        lambda *values: regenerate_review(review, *values),
+        inputs=[job_id, revision, changes],
+        outputs=[status, revision],
+    )
+    approve_button.click(
+        lambda *values: approve_review(review, *values),
+        inputs=[*metadata_inputs, targets],
+        outputs=[status, revision],
+    )
 
 
 def _build_channel_workspace(
@@ -293,11 +342,12 @@ def _build_channel_workspace(
 def create_ui(
     workflow: object | None = None,
     channels: object | None = None,
+    review: object | None = None,
     *,
     channel_admin_enabled: bool = False,
 ) -> gr.Blocks:
     """Build an import-safe UI shell around injected application interfaces."""
-    backend_ready = workflow is not None and channels is not None
+    backend_ready = review is not None and channels is not None
     channels_ready = channels is not None
     channel_choices, channel_status = list_channel_choices(channels, enabled_only=True)
 
@@ -358,7 +408,7 @@ def create_ui(
                 with gr.Tab("Video Remix"):
                     _build_remix_workspace()
                 with gr.Tab("Review & Publish"):
-                    _build_review_workspace()
+                    _build_review_workspace(review)
                 with gr.Tab("Channel & Credentials"):
                     _build_channel_workspace(
                         channels,

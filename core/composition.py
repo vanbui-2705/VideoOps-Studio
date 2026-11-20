@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import inspect as sqlalchemy_inspect
 
@@ -26,16 +27,22 @@ from core.adapters.persistence.work_queue import PostgresWorkQueue
 from core.adapters.persistence.workflow_store import PostgresWorkflowStore
 from core.adapters.secrets import EnvironmentSecretResolver
 from core.application.channel_catalog import DefaultChannelCatalog
+from core.application.master_service import MasterRenderConfig, MasterRenderService
 from core.application.preview_service import (
     PreviewPreparationConfig,
     PreviewPreparationService,
 )
 from core.application.remix_service import RemixMediaConfig, RemixMediaService
+from core.application.review_service import ReviewService
 from core.application.story_service import StoryScriptService, StoryServiceConfig
-from core.application.video_workflow import DefaultWorkflowProcessor
+from core.application.video_workflow import (
+    DefaultVideoWorkflow,
+    DefaultWorkflowProcessor,
+)
 from core.domain.models import WorkKind
 from core.llm.contracts import LlmProvider
 from core.llm.errors import LlmConfigurationError
+from core.runtime.master_handler import MasterRenderHandler
 from core.runtime.preview_handler import PreviewRenderHandler
 from core.runtime.remix_handler import RemixPreparationHandler
 from core.runtime.story_handler import StoryPreparationHandler
@@ -45,6 +52,34 @@ from core.runtime.worker import Worker
 class SystemClock:
     def now(self) -> datetime:
         return datetime.now(UTC)
+
+
+class SystemIds:
+    def new_job_id(self) -> str:
+        return f"job-{uuid4()}"
+
+
+def build_review_service(config: AppConfig) -> ReviewService:
+    """Compose the read/command facade consumed by the Review Gate UI."""
+    if not config.DATABASE_URL:
+        raise ValueError("DATABASE_URL is required for ReviewService")
+    engine = create_database_engine(
+        config.DATABASE_URL,
+        pool_size=config.DB_POOL_SIZE,
+        max_overflow=config.DB_MAX_OVERFLOW,
+    )
+    store = PostgresWorkflowStore(engine, default_max_attempts=config.WORK_MAX_ATTEMPTS)
+    workflow = DefaultVideoWorkflow(
+        store,
+        PostgresChannelRepository(engine),
+        SystemClock(),
+        SystemIds(),
+    )
+    return ReviewService(
+        workflow,
+        PostgresArtifactManifestStore(engine),
+        config.TEMP_DIR,
+    )
 
 
 def build_channel_catalog(
@@ -233,6 +268,19 @@ def validate_remix_runtime(config: AppConfig) -> None:
         raise ValueError(f"Required remix binary is unavailable: {config.YTDLP_BINARY}")
 
 
+def validate_master_settings(config: AppConfig) -> None:
+    """Reject master profiles outside the bounded production policy."""
+    if (
+        config.MASTER_RENDER_TIMEOUT_SECONDS <= 0
+        or config.MASTER_PRESET != "superfast"
+        or not 0 <= config.MASTER_CRF <= 51
+        or config.MASTER_DURATION_TOLERANCE_MS < 0
+        or config.MAX_FFMPEG_THREADS > 2
+        or config.MEDIA_RENDER_CONCURRENCY != 1
+    ):
+        raise ValueError("Master render settings are invalid")
+
+
 def _require_worker_tables(engine: Any) -> None:
     required_tables = {
         "jobs",
@@ -279,6 +327,31 @@ def _build_remix_service(
             max_sources=config.REMIX_MAX_SOURCES,
             max_source_duration_seconds=config.REMIX_MAX_SOURCE_DURATION_SECONDS,
             duration_tolerance_ms=config.REMIX_DURATION_TOLERANCE_MS,
+        ),
+    )
+
+
+def _build_master_service(
+    config: AppConfig,
+    manifests: Any,
+    probe: Any,
+) -> MasterRenderService:
+    from core.adapters.media.ffmpeg_master import FfmpegMasterRenderer
+
+    validate_master_settings(config)
+    return MasterRenderService(
+        renderer=FfmpegMasterRenderer(
+            config.FFMPEG_BINARY,
+            timeout_seconds=config.MASTER_RENDER_TIMEOUT_SECONDS,
+        ),
+        probe=probe,
+        manifests=manifests,
+        config=MasterRenderConfig(
+            temp_root=config.TEMP_DIR,
+            assets_root=config.ASSETS_DIR,
+            duration_tolerance_ms=config.MASTER_DURATION_TOLERANCE_MS,
+            preset=config.MASTER_PRESET,
+            crf=config.MASTER_CRF,
         ),
     )
 
@@ -334,10 +407,11 @@ def build_remix_worker(config: AppConfig) -> RemixWorkerRuntime:
 
 
 def build_preview_worker(config: AppConfig) -> PreviewWorkerRuntime:
-    """Compose a worker that only leases story preview rendering work."""
+    """Compose one serialized worker for preview and master rendering."""
     if not config.DATABASE_URL:
         raise ValueError("DATABASE_URL is required for the preview worker")
     validate_media_runtime(config)
+    validate_master_settings(config)
     import httpx
 
     from core.adapters.media.edge_tts_provider import EdgeTtsProvider
@@ -403,12 +477,19 @@ def build_preview_worker(config: AppConfig) -> PreviewWorkerRuntime:
         ),
     )
     remix_service = _build_remix_service(config, manifests, probe)
-    handler = PreviewRenderHandler(workflow_store, channels, service, remix_service)
+    master_service = _build_master_service(config, manifests, probe)
+    preview_handler = PreviewRenderHandler(
+        workflow_store, channels, service, remix_service
+    )
+    master_handler = MasterRenderHandler(workflow_store, channels, master_service)
     worker = Worker(
         worker_id=f"{config.WORKER_ID}-preview",
         queue=queue,
         processor=DefaultWorkflowProcessor(workflow_store, SystemClock()),
-        handlers={WorkKind.RENDER_PREVIEW: handler},
+        handlers={
+            WorkKind.RENDER_PREVIEW: preview_handler,
+            WorkKind.RENDER_MASTER: master_handler,
+        },
         lease_seconds=config.WORK_LEASE_SECONDS,
         poll_interval_seconds=config.WORK_POLL_INTERVAL_SECONDS,
     )

@@ -1,4 +1,4 @@
-"""Run the dedicated story preview media worker."""
+"""Run the serialized preview and master media worker."""
 
 from config import load_config
 from core.composition import build_preview_worker
