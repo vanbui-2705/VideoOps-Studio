@@ -201,3 +201,7 @@ docs/                        Requirements, design, plans, and operations guides
 - Workspace paths are revision-contained and reject traversal or symlink escape.
 - Persisted failures and artifact metadata exclude API keys, raw signed URLs, and subprocess stderr.
 - Master success creates durable publish intents but no platform adapter consumes them yet. Publishing and verified zero-retention cleanup are not implemented.
+
+## License
+
+VideoOps Studio is released under the [MIT License](LICENSE).
