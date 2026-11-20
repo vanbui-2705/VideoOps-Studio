@@ -30,12 +30,14 @@ from core.application.preview_service import (
     PreviewPreparationConfig,
     PreviewPreparationService,
 )
+from core.application.remix_service import RemixMediaConfig, RemixMediaService
 from core.application.story_service import StoryScriptService, StoryServiceConfig
 from core.application.video_workflow import DefaultWorkflowProcessor
 from core.domain.models import WorkKind
 from core.llm.contracts import LlmProvider
 from core.llm.errors import LlmConfigurationError
 from core.runtime.preview_handler import PreviewRenderHandler
+from core.runtime.remix_handler import RemixPreparationHandler
 from core.runtime.story_handler import StoryPreparationHandler
 from core.runtime.worker import Worker
 
@@ -224,6 +226,113 @@ def validate_media_runtime(config: AppConfig) -> None:
         raise ValueError("FFmpeg requires the subtitles filter")
 
 
+def validate_remix_runtime(config: AppConfig) -> None:
+    """Validate local binaries required before leasing PREPARE_REMIX work."""
+    validate_media_runtime(config)
+    if shutil.which(config.YTDLP_BINARY) is None:
+        raise ValueError(f"Required remix binary is unavailable: {config.YTDLP_BINARY}")
+
+
+def _require_worker_tables(engine: Any) -> None:
+    required_tables = {
+        "jobs",
+        "work_items",
+        "artifacts",
+        "channel_profile_revisions",
+        "story_generations",
+    }
+    available_tables = set(sqlalchemy_inspect(engine).get_table_names())
+    if required_tables - available_tables:
+        raise ValueError("Database migrations are not at the required revision")
+
+
+def _build_remix_service(
+    config: AppConfig,
+    manifests: Any,
+    probe: Any,
+) -> RemixMediaService:
+    from core.adapters.media.remix import (
+        FfmpegRemixPreviewRenderer,
+        FfmpegRemixProcessor,
+        YtDlpSourceDownloader,
+    )
+
+    return RemixMediaService(
+        downloader=YtDlpSourceDownloader(
+            config.YTDLP_BINARY,
+            timeout_seconds=config.REMIX_DOWNLOAD_TIMEOUT_SECONDS,
+            max_bytes=config.REMIX_MAX_DOWNLOAD_BYTES,
+        ),
+        processor=FfmpegRemixProcessor(
+            config.FFMPEG_BINARY,
+            timeout_seconds=config.PREVIEW_RENDER_TIMEOUT_SECONDS,
+        ),
+        renderer=FfmpegRemixPreviewRenderer(
+            config.FFMPEG_BINARY,
+            timeout_seconds=config.PREVIEW_RENDER_TIMEOUT_SECONDS,
+        ),
+        probe=probe,
+        manifests=manifests,
+        config=RemixMediaConfig(
+            temp_root=config.TEMP_DIR,
+            assets_root=config.ASSETS_DIR,
+            max_sources=config.REMIX_MAX_SOURCES,
+            max_source_duration_seconds=config.REMIX_MAX_SOURCE_DURATION_SECONDS,
+            duration_tolerance_ms=config.REMIX_DURATION_TOLERANCE_MS,
+        ),
+    )
+
+
+@dataclass(slots=True)
+class RemixWorkerRuntime:
+    worker: Worker
+    engine: Any
+
+    def close(self) -> None:
+        self.worker.close()
+        self.engine.dispose()
+
+
+def build_remix_worker(config: AppConfig) -> RemixWorkerRuntime:
+    """Compose a worker that only leases PREPARE_REMIX work."""
+    if not config.DATABASE_URL:
+        raise ValueError("DATABASE_URL is required for the remix worker")
+    validate_remix_runtime(config)
+    from core.adapters.media.ffmpeg_preview import FfprobeMediaProbe
+
+    engine = create_database_engine(
+        config.DATABASE_URL,
+        pool_size=config.DB_POOL_SIZE,
+        max_overflow=config.DB_MAX_OVERFLOW,
+    )
+    try:
+        _require_worker_tables(engine)
+    except Exception:
+        engine.dispose()
+        raise
+    workflow_store = PostgresWorkflowStore(
+        engine, default_max_attempts=config.WORK_MAX_ATTEMPTS
+    )
+    queue = PostgresWorkQueue(engine)
+    channels = PostgresChannelRepository(engine)
+    manifests = PostgresArtifactManifestStore(engine)
+    probe = FfprobeMediaProbe(
+        config.FFPROBE_BINARY,
+        timeout_seconds=min(config.PREVIEW_RENDER_TIMEOUT_SECONDS, 60),
+    )
+    service = _build_remix_service(config, manifests, probe)
+    handler = RemixPreparationHandler(workflow_store, channels, service)
+    worker = Worker(
+        worker_id=f"{config.WORKER_ID}-remix",
+        queue=queue,
+        processor=DefaultWorkflowProcessor(workflow_store, SystemClock()),
+        handlers={WorkKind.PREPARE_REMIX: handler},
+        lease_seconds=config.WORK_LEASE_SECONDS,
+        poll_interval_seconds=config.WORK_POLL_INTERVAL_SECONDS,
+    )
+    return RemixWorkerRuntime(worker, engine)
+
+
 def build_preview_worker(config: AppConfig) -> PreviewWorkerRuntime:
     """Compose a worker that only leases story preview rendering work."""
     if not config.DATABASE_URL:
@@ -247,18 +356,11 @@ def build_preview_worker(config: AppConfig) -> PreviewWorkerRuntime:
         pool_size=config.DB_POOL_SIZE,
         max_overflow=config.DB_MAX_OVERFLOW,
     )
-    required_tables = {
-        "jobs",
-        "work_items",
-        "artifacts",
-        "channel_profile_revisions",
-        "story_generations",
-    }
-    available_tables = set(sqlalchemy_inspect(engine).get_table_names())
-    missing_tables = required_tables - available_tables
-    if missing_tables:
+    try:
+        _require_worker_tables(engine)
+    except Exception:
         engine.dispose()
-        raise ValueError("Database migrations are not at the required revision")
+        raise
     workflow_store = PostgresWorkflowStore(
         engine, default_max_attempts=config.WORK_MAX_ATTEMPTS
     )
@@ -274,6 +376,10 @@ def build_preview_worker(config: AppConfig) -> PreviewWorkerRuntime:
         providers.append(PexelsStockProvider(config.PEXELS_API_KEY, client))
     if config.PIXABAY_API_KEY:
         providers.append(PixabayStockProvider(config.PIXABAY_API_KEY, client))
+    probe = FfprobeMediaProbe(
+        config.FFPROBE_BINARY,
+        timeout_seconds=min(config.PREVIEW_RENDER_TIMEOUT_SECONDS, 60),
+    )
     service = PreviewPreparationService(
         tts=EdgeTtsProvider(
             connect_timeout_seconds=config.TTS_CONNECT_TIMEOUT_SECONDS,
@@ -283,10 +389,7 @@ def build_preview_worker(config: AppConfig) -> PreviewWorkerRuntime:
         downloader=BoundedStockDownloader(
             client, max_bytes=config.STOCK_MAX_DOWNLOAD_BYTES
         ),
-        probe=FfprobeMediaProbe(
-            config.FFPROBE_BINARY,
-            timeout_seconds=min(config.PREVIEW_RENDER_TIMEOUT_SECONDS, 60),
-        ),
+        probe=probe,
         renderer=FfmpegPreviewRenderer(
             config.FFMPEG_BINARY,
             timeout_seconds=config.PREVIEW_RENDER_TIMEOUT_SECONDS,
@@ -299,7 +402,8 @@ def build_preview_worker(config: AppConfig) -> PreviewWorkerRuntime:
             max_attempts=config.MEDIA_MAX_ATTEMPTS,
         ),
     )
-    handler = PreviewRenderHandler(workflow_store, channels, service)
+    remix_service = _build_remix_service(config, manifests, probe)
+    handler = PreviewRenderHandler(workflow_store, channels, service, remix_service)
     worker = Worker(
         worker_id=f"{config.WORKER_ID}-preview",
         queue=queue,

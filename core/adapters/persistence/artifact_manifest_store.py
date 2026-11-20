@@ -101,6 +101,7 @@ def _metadata_to_dict(manifest: ArtifactManifest) -> dict:
                 "width": media.width,
                 "height": media.height,
                 "format_name": media.format_name,
+                "has_audio": media.has_audio,
             }
             if media
             else None

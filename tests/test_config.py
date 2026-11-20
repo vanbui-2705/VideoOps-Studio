@@ -10,6 +10,8 @@ def test_load_config_defaults(tmp_path):
     assert Path(cfg.TEMP_DIR).exists()
     assert Path(cfg.OUTPUT_DIR).exists()
     assert Path(cfg.CHANNELS_DIR).exists()
+    assert cfg.REMIX_MAX_SOURCES == 10
+    assert cfg.REMIX_MAX_DOWNLOAD_BYTES == 1024 * 1024 * 1024
 
 
 def test_database_secrets_are_loaded_but_hidden_from_repr(monkeypatch):

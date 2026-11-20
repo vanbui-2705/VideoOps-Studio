@@ -16,6 +16,7 @@ class JobClaimed:
 @dataclass(frozen=True, slots=True)
 class IngestionCompleted:
     expected_revision: int
+    content_revision: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

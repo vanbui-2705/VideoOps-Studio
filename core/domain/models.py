@@ -178,6 +178,8 @@ class RemixClipSnapshot:
     end_seconds: float
     order: int
     speed: float
+    crop_mode: str = "fill"
+    mirror: bool = False
 
 
 @dataclass(frozen=True, slots=True)

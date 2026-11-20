@@ -125,6 +125,8 @@ class DefaultVideoWorkflow:
                         end_seconds=clip.end_seconds,
                         order=clip.order,
                         speed=clip.speed,
+                        crop_mode=clip.crop_mode,
+                        mirror=clip.mirror,
                     )
                     for clip in sorted(request.clips, key=lambda item: item.order)
                 ),
@@ -492,8 +494,26 @@ class DefaultWorkflowProcessor:
                 ),
             )
         elif isinstance(event, IngestionCompleted):
+            if (
+                event.content_revision is not None
+                and event.content_revision != job.content_revision
+            ):
+                raise DomainValidationError("Ingested content revision is stale")
+            if job.status is JobStatus.QUEUED:
+                updated = transition(
+                    job,
+                    JobStatus.INGESTING,
+                    JobPhase.REMIX_PREPARATION,
+                    self._clock.now(),
+                )
+            elif job.status is JobStatus.INGESTING:
+                updated = job
+            else:
+                raise InvalidTransition(
+                    "Ingestion completion requires queued ingestion"
+                )
             updated = transition(
-                job,
+                updated,
                 JobStatus.RENDERING_PREVIEW,
                 JobPhase.PREVIEW_RENDER,
                 self._clock.now(),

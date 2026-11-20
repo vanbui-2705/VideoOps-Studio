@@ -1,4 +1,4 @@
-"""Worker handler for revision-safe story preview preparation."""
+"""Worker handler for revision-safe story and remix preview preparation."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from core.application.preview_service import (
     PreparePreviewRequest,
     PreviewPreparationService,
 )
+from core.application.remix_service import PrepareRemixRequest, RemixMediaService
 from core.domain.errors import (
     DomainValidationError,
     MediaConfigurationError,
@@ -23,6 +24,7 @@ from core.domain.models import (
     JobPhase,
     JobStatus,
     JobType,
+    RemixSnapshot,
     ResumeAction,
     WorkKind,
 )
@@ -33,11 +35,13 @@ class PreviewRenderHandler:
         self,
         workflow_store: WorkflowStore,
         channels: ChannelRepository,
-        service: PreviewPreparationService,
+        service: PreviewPreparationService | None,
+        remix_service: RemixMediaService | None = None,
     ) -> None:
         self._workflow_store = workflow_store
         self._channels = channels
         self._service = service
+        self._remix_service = remix_service
 
     async def handle(
         self, work: QueuedWork, heartbeat: Callable[[], None]
@@ -46,26 +50,41 @@ class PreviewRenderHandler:
         if (
             job is None
             or work.intent.kind is not WorkKind.RENDER_PREVIEW
-            or job.job_type is not JobType.STORY
             or job.status is not JobStatus.RENDERING_PREVIEW
             or job.content_revision != work.intent.content_revision
         ):
             return None
         try:
-            if job.prepared_story is None:
-                raise MediaConfigurationError("Prepared story is unavailable")
             channel = self._channels.get_revision(job.channel_id, job.channel_revision)
             if channel is None:
                 raise MediaConfigurationError("Frozen channel revision is unavailable")
-            bundle = await self._service.prepare(
-                PreparePreviewRequest(
-                    job.job_id,
-                    job.content_revision,
-                    job.prepared_story,
-                    channel,
-                ),
-                heartbeat,
-            )
+            if job.job_type is JobType.STORY:
+                if job.prepared_story is None or self._service is None:
+                    raise MediaConfigurationError("Prepared story is unavailable")
+                bundle = await self._service.prepare(
+                    PreparePreviewRequest(
+                        job.job_id,
+                        job.content_revision,
+                        job.prepared_story,
+                        channel,
+                    ),
+                    heartbeat,
+                )
+            else:
+                if (
+                    not isinstance(job.request_snapshot, RemixSnapshot)
+                    or self._remix_service is None
+                ):
+                    raise MediaConfigurationError("Prepared remix is unavailable")
+                bundle = self._remix_service.render_preview(
+                    PrepareRemixRequest(
+                        job.job_id,
+                        job.content_revision,
+                        job.request_snapshot,
+                        channel,
+                    ),
+                    heartbeat,
+                )
             preview = [
                 item for item in bundle.artifacts if item.artifact_type == "PREVIEW"
             ]

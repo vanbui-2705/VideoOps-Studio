@@ -71,6 +71,7 @@ class MediaInfo:
     width: int | None = None
     height: int | None = None
     format_name: str | None = None
+    has_audio: bool = False
 
     def __post_init__(self) -> None:
         if self.duration_ms <= 0 or not self.codec.strip():

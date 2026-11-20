@@ -82,6 +82,14 @@ class AppConfig:
     MEDIA_MIN_FREE_DISK_GB: float = 0.25
     MEDIA_MAX_ATTEMPTS: int = 3
 
+    # Remix source ingestion and preview preparation
+    YTDLP_BINARY: str = "yt-dlp"
+    REMIX_DOWNLOAD_TIMEOUT_SECONDS: float = 300.0
+    REMIX_MAX_DOWNLOAD_BYTES: int = 1024 * 1024 * 1024
+    REMIX_MAX_SOURCES: int = 10
+    REMIX_MAX_SOURCE_DURATION_SECONDS: float = 7200.0
+    REMIX_DURATION_TOLERANCE_MS: int = 750
+
     def ensure_directories(self) -> None:
         """Create runtime directories if they do not exist."""
         for path in [
@@ -148,6 +156,20 @@ def load_config() -> AppConfig:
         ),
         MEDIA_MIN_FREE_DISK_GB=float(os.getenv("MEDIA_MIN_FREE_DISK_GB", "0.25")),
         MEDIA_MAX_ATTEMPTS=int(os.getenv("MEDIA_MAX_ATTEMPTS", "3")),
+        YTDLP_BINARY=os.getenv("YTDLP_BINARY", "yt-dlp"),
+        REMIX_DOWNLOAD_TIMEOUT_SECONDS=float(
+            os.getenv("REMIX_DOWNLOAD_TIMEOUT_SECONDS", "300")
+        ),
+        REMIX_MAX_DOWNLOAD_BYTES=int(
+            os.getenv("REMIX_MAX_DOWNLOAD_BYTES", str(1024 * 1024 * 1024))
+        ),
+        REMIX_MAX_SOURCES=int(os.getenv("REMIX_MAX_SOURCES", "10")),
+        REMIX_MAX_SOURCE_DURATION_SECONDS=float(
+            os.getenv("REMIX_MAX_SOURCE_DURATION_SECONDS", "7200")
+        ),
+        REMIX_DURATION_TOLERANCE_MS=int(
+            os.getenv("REMIX_DURATION_TOLERANCE_MS", "750")
+        ),
     )
     cfg.ensure_directories()
     return cfg

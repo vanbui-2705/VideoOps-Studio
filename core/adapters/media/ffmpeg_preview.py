@@ -58,10 +58,11 @@ class FfprobeMediaProbe:
             (stream for stream in streams if stream.get("codec_type") == "video"),
             None,
         )
-        selected = video or next(
+        audio = next(
             (stream for stream in streams if stream.get("codec_type") == "audio"),
             None,
         )
+        selected = video or audio
         if selected is None:
             raise MediaInvalidOutput("Media has no supported stream")
         duration_value = data.get("format", {}).get("duration") or selected.get(
@@ -77,6 +78,7 @@ class FfprobeMediaProbe:
             width=int(video["width"]) if video and video.get("width") else None,
             height=int(video["height"]) if video and video.get("height") else None,
             format_name=data.get("format", {}).get("format_name"),
+            has_audio=audio is not None,
         )
 
 

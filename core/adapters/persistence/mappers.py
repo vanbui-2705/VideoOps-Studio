@@ -69,6 +69,8 @@ def job_to_dict(job: VideoJob) -> dict[str, Any]:
                     "end_seconds": clip.end_seconds,
                     "order": clip.order,
                     "speed": clip.speed,
+                    "crop_mode": clip.crop_mode,
+                    "mirror": clip.mirror,
                 }
                 for clip in job.request_snapshot.clips
             ],
