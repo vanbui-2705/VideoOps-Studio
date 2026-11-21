@@ -2,7 +2,7 @@
 
 VideoOps Studio is a cloud-oriented video production pipeline for creating AI Story and Remix previews on resource-constrained infrastructure. It combines a durable PostgreSQL workflow, isolated workers, FFmpeg media processing, and a Gradio operator interface.
 
-The current implementation includes the human Review Gate and approved master rendering. Story and Remix jobs can be reviewed, frozen at one content/channel revision, and rendered as validated 1080p masters. Platform publishing and final purge workers remain roadmap items.
+The current implementation covers the complete operator workflow: Story/Remix submission, human review, approved master rendering, durable official YouTube/TikTok publishing, and audited zero-retention cleanup. Jobs are frozen at one content/channel revision, published idempotently, and completed only after media deletion is verified.
 
 ## Current capabilities
 
@@ -18,7 +18,10 @@ The current implementation includes the human Review Gate and approved master re
 | Remix trim, speed, crop/fit, mirror, audio normalization, and preview | Implemented |
 | Gradio Review Gate and channel administration UI | Implemented |
 | Story/Remix approved 1080p master rendering | Implemented |
-| YouTube/TikTok publishing and zero-retention purge | Planned |
+| Official YouTube/TikTok publishing | Implemented |
+| Verified zero-retention purge and retention sweeper | Implemented |
+| Authenticated role-aware operator services and audit query | Implemented |
+| Non-root Docker Compose deployment and CI quality gates | Implemented |
 
 ## Architecture
 
@@ -37,13 +40,18 @@ flowchart LR
     PW --> MASTER[Validated 1080p master]
     MASTER --> DB
     DB --> PUBLISH[Durable publish intents]
+    PUBLISH --> YT[YouTube Data API]
+    PUBLISH --> TT[TikTok Content Posting API]
+    YT --> PURGE[Audited verified purge]
+    TT --> PURGE
+    PURGE --> DONE[Completed with zero media bytes]
 ```
 
 Core business logic is framework-independent. Gradio stays in `ui/`; domain and application code under `core/` do not import it. Long-running work is persisted before workers claim it, so UI requests do not need to remain open while media is processed.
 
 ## Requirements
 
-- Python 3.10 or newer.
+- Python 3.12 or newer.
 - PostgreSQL 14 or newer; PostgreSQL 16 is used by the integration suite.
 - FFmpeg and ffprobe with H.264 (`libx264`) and AAC support.
 - yt-dlp for Remix source ingestion.
@@ -58,9 +66,9 @@ Clone and install the project:
 ```powershell
 git clone https://github.com/vanbui-2705/VideoOps-Studio.git
 cd VideoOps-Studio
-py -3 -m venv .venv
+py -3.12 -m venv .venv
 .venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+python -m pip install -e ".[dev]"
 ```
 
 On Linux or macOS, activate the environment with `source .venv/bin/activate`.
@@ -79,7 +87,7 @@ Launch the UI:
 python app.py
 ```
 
-Gradio prints the local URL after startup. With `DATABASE_URL` configured, the Review Gate loads a job by ID, validates its current preview, saves metadata, requests regeneration, and approves it for master rendering. Story/Remix submission remains a future UI wiring task.
+Gradio prints the local URL after startup. With `DATABASE_URL` configured, the UI submits Story/Remix jobs, refreshes durable status, validates current previews, applies revision-aware review commands, and controls publish recovery without exposing provider secrets.
 
 ## Configuration
 
@@ -101,7 +109,7 @@ Optional integrations:
 - `PEXELS_API_KEY` and `PIXABAY_API_KEY` for stock media. Generated backgrounds remain available without them.
 - Channel credential bundles are resolved from environment variables. Secret values are never stored in channel profiles.
 
-Keep `CHANNEL_ADMIN_ENABLED=false` on public deployments. It is an operational gate for profile mutation, not an authentication system.
+For `DEPLOYMENT_MODE=private` or `public`, startup requires `APP_AUTH_USERNAME` and an application password of at least 12 characters. Use HTTPS and external network controls. `CHANNEL_ADMIN_ENABLED` remains a separate operational gate, and channel mutation additionally requires the `ADMIN` role.
 
 ## Run the workers
 
@@ -125,6 +133,19 @@ Serialized Story/Remix preview and master rendering:
 python run_preview_worker.py
 ```
 
+Official provider publishing:
+
+```powershell
+python run_publish_worker.py
+```
+
+Verified media cleanup and retention policy:
+
+```powershell
+python run_purge_worker.py
+python run_retention_sweeper.py
+```
+
 The workers lease only their supported work kinds:
 
 ```text
@@ -132,6 +153,10 @@ PREPARE_STORY  -> run_story_worker.py
 PREPARE_REMIX  -> run_remix_worker.py
 RENDER_PREVIEW -> run_preview_worker.py
 RENDER_MASTER  -> run_preview_worker.py
+PUBLISH_TARGET  -> run_publish_worker.py
+RECONCILE_TARGET -> run_publish_worker.py
+PURGE_JOB -> run_purge_worker.py
+retention policy -> run_retention_sweeper.py -> Cancel -> PURGE_JOB
 ```
 
 ## Media profiles
@@ -155,6 +180,7 @@ Run the fast suite:
 python -m pytest tests -q
 python -m ruff check .
 python -m ruff format --check .
+python -m mypy core ui config.py app.py
 ```
 
 Run PostgreSQL integration tests:
@@ -193,14 +219,22 @@ docs/                        Requirements, design, plans, and operations guides
 - [Module 6 operations](docs/MODULE_6_OPERATIONS.md)
 - [Module 7 operations](docs/MODULE_7_OPERATIONS.md)
 - [Module 8 operations](docs/MODULE_8_OPERATIONS.md)
+- [Module 9 operations](docs/MODULE_9_OPERATIONS.md)
+- [Module 10 operations](docs/MODULE_10_OPERATIONS.md)
+- [Module 11 operations](docs/MODULE_11_OPERATIONS.md)
+- [Module 12 security operations](docs/MODULE_12_SECURITY_OPERATIONS.md)
+- [Module 13 deployment](docs/MODULE_13_DEPLOYMENT.md)
 
 ## Security notes
 
 - Subprocess adapters use argument lists and never enable `shell=True`.
 - Remix URLs reject embedded credentials, private/non-global resolved IPs, and unsafe schemes before yt-dlp runs.
-- Workspace paths are revision-contained and reject traversal or symlink escape.
+- Workspace paths are revision-contained and reject traversal, symlink, and junction escape.
 - Persisted failures and artifact metadata exclude API keys, raw signed URLs, and subprocess stderr.
-- Master success creates durable publish intents but no platform adapter consumes them yet. Publishing and verified zero-retention cleanup are not implemented.
+- Publish receipts persist only safe operation/video IDs and trusted public URLs; access tokens, signed upload URLs, and provider payloads are never persisted.
+- Ambiguous or interrupted publication reconciles before another publish attempt; retention never purges an `UNKNOWN` outcome.
+- Non-local deployments fail closed without application authentication, application facades enforce default-deny roles, and sensitive commands record their actor ID.
+- Purge writes a sanitized audit snapshot before deletion and completes only after verifying zero remaining media bytes.
 
 ## License
 

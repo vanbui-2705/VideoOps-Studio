@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
@@ -42,6 +42,35 @@ class PostgresWorkflowStore:
         with self._sessions() as session:
             row = session.get(JobRow, job_id)
             return job_from_dict(row.aggregate_snapshot) if row else None
+
+    def list_retention_candidates(
+        self,
+        draft_before: datetime,
+        publish_before: datetime,
+        limit: int,
+    ) -> tuple[VideoJob, ...]:
+        draft_statuses = {
+            JobStatus.QUEUED.value,
+            JobStatus.INGESTING.value,
+            JobStatus.RENDERING_PREVIEW.value,
+            JobStatus.AWAITING_REVIEW.value,
+        }
+        with self._sessions() as session:
+            rows = session.scalars(
+                select(JobRow)
+                .where(
+                    or_(
+                        (JobRow.status.in_(draft_statuses))
+                        & (JobRow.updated_at <= draft_before),
+                        (JobRow.status == JobStatus.FAILED.value)
+                        & (JobRow.phase == "PUBLISH")
+                        & (JobRow.updated_at <= publish_before),
+                    )
+                )
+                .order_by(JobRow.updated_at, JobRow.id)
+                .limit(limit)
+            ).all()
+            return tuple(job_from_dict(row.aggregate_snapshot) for row in rows)
 
     def get_command_result(self, command_id: str) -> VideoJob | None:
         with self._sessions() as session:
@@ -176,6 +205,7 @@ class PostgresWorkflowStore:
                 AuditEntryRow(
                     job_id=job.job_id,
                     actor_type="USER" if decision.command_id else "WORKER",
+                    actor_id=decision.actor_id,
                     action="WORKFLOW_COMMITTED",
                     audit_metadata={"revision": job.revision},
                     created_at=job.updated_at,

@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol, TypeVar
 
 from core.application.events import WorkflowEvent
-from core.application.ports import QueuedWork, WorkQueue
+from core.application.ports import DeferredWork, QueuedWork, WorkQueue
 from core.application.video_workflow import WorkflowProcessor
 from core.domain.models import WorkKind
 
@@ -26,7 +26,12 @@ class WorkHandler(Protocol):
         self,
         work: QueuedWork,
         heartbeat: Callable[[], None],
-    ) -> WorkflowEvent | Awaitable[WorkflowEvent | None] | None: ...
+    ) -> (
+        WorkflowEvent
+        | DeferredWork
+        | Awaitable[WorkflowEvent | DeferredWork | None]
+        | None
+    ): ...
 
 
 class Worker:
@@ -72,19 +77,30 @@ class Worker:
             return False
         try:
             handler = self._handlers[work.intent.kind]
-            event = handler.handle(
-                work,
-                lambda: self._queue.heartbeat(
+
+            def heartbeat() -> None:
+                self._queue.heartbeat(
                     work.work_id,
                     self._worker_id,
                     self._lease_seconds,
-                ),
-            )
+                )
+
+            event = handler.handle(work, heartbeat)
             if inspect.isawaitable(event):
                 event = self.run_coroutine(event)
-            if event is not None:
-                self._processor.apply(work.intent.job_id, event)
-            self._queue.ack(work.work_id, self._worker_id)
+            if isinstance(event, DeferredWork):
+                if event.event is not None:
+                    self._processor.apply(work.intent.job_id, event.event)
+                self._queue.retry(
+                    work.work_id,
+                    self._worker_id,
+                    event.error_code,
+                    event.retry_at,
+                )
+            else:
+                if event is not None:
+                    self._processor.apply(work.intent.job_id, event)
+                self._queue.ack(work.work_id, self._worker_id)
         except Exception as exc:  # noqa: BLE001 - preserve leases at process boundary
             error_code = f"WORKER_{type(exc).__name__.upper()}"[:128]
             delay = self._retry_base_seconds * (2 ** max(0, work.attempts - 1))

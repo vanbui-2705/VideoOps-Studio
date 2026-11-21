@@ -228,3 +228,4 @@ class WorkflowDecision:
     job: VideoJob
     work_intents: tuple[WorkIntent, ...] = ()
     command_id: str | None = None
+    actor_id: str | None = None

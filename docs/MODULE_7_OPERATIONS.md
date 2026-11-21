@@ -54,7 +54,7 @@ The downloader uses an argument list and never invokes a shell. DNS validation r
 
 Artifact metadata stores only the source hostname, not the raw URL or query string. Persisted worker failures contain sanitized codes/messages and exclude subprocess stderr, local absolute paths, credentials, and source URLs.
 
-Media remains in the job workspace for Review Gate and safe retry. Final deletion is owned by the later zero-retention purge stage after publishing or cancellation.
+Media remains in the job workspace for Review Gate and safe retry. Final deletion is owned by the Module 10 zero-retention purge stage after publishing or cancellation.
 
 ## Idempotency and recovery
 

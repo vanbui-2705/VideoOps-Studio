@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from config import load_config
 from core.composition import build_remix_worker
+from core.runtime.observability import configure_logging
 
 
 def main() -> None:
+    configure_logging()
     runtime = build_remix_worker(load_config())
     try:
         runtime.worker.run_forever()

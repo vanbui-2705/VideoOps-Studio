@@ -2,9 +2,11 @@
 
 from config import load_config
 from core.composition import build_preview_worker
+from core.runtime.observability import configure_logging
 
 
 def main() -> None:
+    configure_logging()
     runtime = build_preview_worker(load_config())
     try:
         runtime.worker.run_forever()

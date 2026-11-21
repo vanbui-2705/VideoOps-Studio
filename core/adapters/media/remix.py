@@ -24,7 +24,7 @@ def _system_resolver(hostname: str) -> tuple[str, ...]:
     try:
         return tuple(
             dict.fromkeys(
-                item[4][0]
+                str(item[4][0])
                 for item in socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
             )
         )

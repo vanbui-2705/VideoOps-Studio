@@ -18,12 +18,14 @@ from core.adapters.persistence.models import (
     ChannelProfileRevisionRow,
     ChannelProfileRow,
 )
+from core.application.ports import ChannelSnapshot
 from core.domain.channel_models import ChannelDraft, ChannelProfile
 from core.domain.errors import (
     ChannelAlreadyExists,
     ChannelProfileNotFound,
     ChannelRevisionConflict,
 )
+from core.domain.models import Platform
 
 
 class PostgresChannelRepository:
@@ -45,6 +47,23 @@ class PostgresChannelRepository:
         with self._sessions() as session:
             row = session.get(ChannelProfileRow, channel_id)
             return self._project(row) if row else None
+
+    def get_snapshot(self, channel_id: str) -> ChannelSnapshot | None:
+        profile = self.get(channel_id)
+        if profile is None or not profile.draft.enabled:
+            return None
+        refs = profile.draft.credential_refs
+        targets: list[Platform] = []
+        if refs.youtube_secret_ref:
+            targets.append(Platform.YOUTUBE)
+        if refs.tiktok_secret_ref:
+            targets.append(Platform.TIKTOK)
+        return ChannelSnapshot(
+            profile.draft.channel_id,
+            profile.draft.name,
+            profile.revision,
+            tuple(targets),
+        )
 
     def get_revision(self, channel_id: str, revision: int) -> ChannelProfile | None:
         with self._sessions() as session:

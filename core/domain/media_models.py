@@ -79,8 +79,10 @@ class MediaInfo:
             raise DomainValidationError("Media information is invalid")
         if (self.width is None) != (self.height is None):
             raise DomainValidationError("Media dimensions are incomplete")
-        if self.width is not None and (self.width <= 0 or self.height <= 0):
-            raise DomainValidationError("Media dimensions are invalid")
+        if self.width is not None:
+            assert self.height is not None
+            if self.width <= 0 or self.height <= 0:
+                raise DomainValidationError("Media dimensions are invalid")
         if self.audio_codec is not None and not self.audio_codec.strip():
             raise DomainValidationError("Audio codec is invalid")
 

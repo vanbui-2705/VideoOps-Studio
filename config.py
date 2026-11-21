@@ -56,6 +56,13 @@ class AppConfig:
     # Channel administration is opt-in for trusted/private deployments.
     CHANNEL_ADMIN_ENABLED: bool = False
 
+    # Deployment authentication and role policy
+    DEPLOYMENT_MODE: str = "local"
+    APP_AUTH_USERNAME: str | None = None
+    APP_AUTH_PASSWORD: str | None = field(default=None, repr=False)
+    APP_AUTH_ROLES: str = "OPERATOR,REVIEWER,ADMIN"
+    TRUST_PROXY_AUTH: bool = False
+
     # AI Story generation. Model IDs are deployment configuration, not defaults.
     LLM_PROVIDER: str = "disabled"
     LLM_MODEL: str = ""
@@ -97,6 +104,27 @@ class AppConfig:
     MASTER_CRF: int = 23
     MASTER_DURATION_TOLERANCE_MS: int = 1000
 
+    # Official provider publishing
+    PUBLISH_REQUEST_TIMEOUT_SECONDS: float = 30.0
+    PUBLISH_MAX_ATTEMPTS: int = 5
+    PUBLISH_RETRY_BASE_SECONDS: float = 2.0
+    YOUTUBE_UPLOAD_CHUNK_BYTES: int = 8 * 1024 * 1024
+    YOUTUBE_MAX_CHUNK_RETRIES: int = 5
+    TIKTOK_API_BASE_URL: str = "https://open.tiktokapis.com"
+    TIKTOK_STATUS_POLL_SECONDS: int = 30
+    TIKTOK_STATUS_MAX_POLLS: int = 120
+    PUBLISH_WORKER_CONCURRENCY: int = 1
+
+    # Verified zero-retention cleanup
+    PURGE_WORKER_CONCURRENCY: int = 1
+    PURGE_MAX_ATTEMPTS: int = 5
+    PURGE_RETRY_BASE_SECONDS: int = 5
+    DRAFT_RETENTION_HOURS: int = 6
+    PUBLISH_FAILURE_RETENTION_HOURS: int = 24
+    PURGE_SCAN_MAX_FILES: int = 10000
+    RETENTION_SWEEP_INTERVAL_SECONDS: int = 300
+    RETENTION_SWEEP_BATCH_SIZE: int = 100
+
     def ensure_directories(self) -> None:
         """Create runtime directories if they do not exist."""
         for path in [
@@ -113,6 +141,15 @@ class AppConfig:
 def load_config() -> AppConfig:
     """Load configuration from environment variables."""
     cfg = AppConfig(
+        TEMP_DIR=Path(
+            os.getenv("TEMP_DIR", str(Path(__file__).resolve().parent / "temp"))
+        ),
+        OUTPUT_DIR=Path(
+            os.getenv("OUTPUT_DIR", str(Path(__file__).resolve().parent / "outputs"))
+        ),
+        ASSETS_DIR=Path(
+            os.getenv("ASSETS_DIR", str(Path(__file__).resolve().parent / "assets"))
+        ),
         PEXELS_API_KEY=os.getenv("PEXELS_API_KEY"),
         PIXABAY_API_KEY=os.getenv("PIXABAY_API_KEY"),
         GEMINI_API_KEY=os.getenv("GEMINI_API_KEY"),
@@ -130,6 +167,12 @@ def load_config() -> AppConfig:
         ),
         WORK_MAX_ATTEMPTS=int(os.getenv("WORK_MAX_ATTEMPTS", "3")),
         CHANNEL_ADMIN_ENABLED=os.getenv("CHANNEL_ADMIN_ENABLED", "false").lower()
+        in {"1", "true", "yes", "on"},
+        DEPLOYMENT_MODE=os.getenv("DEPLOYMENT_MODE", "local").lower(),
+        APP_AUTH_USERNAME=os.getenv("APP_AUTH_USERNAME"),
+        APP_AUTH_PASSWORD=os.getenv("APP_AUTH_PASSWORD"),
+        APP_AUTH_ROLES=os.getenv("APP_AUTH_ROLES", "OPERATOR,REVIEWER,ADMIN"),
+        TRUST_PROXY_AUTH=os.getenv("TRUST_PROXY_AUTH", "false").lower()
         in {"1", "true", "yes", "on"},
         LLM_PROVIDER=os.getenv("LLM_PROVIDER", "disabled").lower(),
         LLM_MODEL=os.getenv("LLM_MODEL", ""),
@@ -186,6 +229,33 @@ def load_config() -> AppConfig:
         MASTER_DURATION_TOLERANCE_MS=int(
             os.getenv("MASTER_DURATION_TOLERANCE_MS", "1000")
         ),
+        PUBLISH_REQUEST_TIMEOUT_SECONDS=float(
+            os.getenv("PUBLISH_REQUEST_TIMEOUT_SECONDS", "30")
+        ),
+        PUBLISH_MAX_ATTEMPTS=int(os.getenv("PUBLISH_MAX_ATTEMPTS", "5")),
+        PUBLISH_RETRY_BASE_SECONDS=float(os.getenv("PUBLISH_RETRY_BASE_SECONDS", "2")),
+        YOUTUBE_UPLOAD_CHUNK_BYTES=int(
+            os.getenv("YOUTUBE_UPLOAD_CHUNK_BYTES", str(8 * 1024 * 1024))
+        ),
+        YOUTUBE_MAX_CHUNK_RETRIES=int(os.getenv("YOUTUBE_MAX_CHUNK_RETRIES", "5")),
+        TIKTOK_API_BASE_URL=os.getenv(
+            "TIKTOK_API_BASE_URL", "https://open.tiktokapis.com"
+        ),
+        TIKTOK_STATUS_POLL_SECONDS=int(os.getenv("TIKTOK_STATUS_POLL_SECONDS", "30")),
+        TIKTOK_STATUS_MAX_POLLS=int(os.getenv("TIKTOK_STATUS_MAX_POLLS", "120")),
+        PUBLISH_WORKER_CONCURRENCY=int(os.getenv("PUBLISH_WORKER_CONCURRENCY", "1")),
+        PURGE_WORKER_CONCURRENCY=int(os.getenv("PURGE_WORKER_CONCURRENCY", "1")),
+        PURGE_MAX_ATTEMPTS=int(os.getenv("PURGE_MAX_ATTEMPTS", "5")),
+        PURGE_RETRY_BASE_SECONDS=int(os.getenv("PURGE_RETRY_BASE_SECONDS", "5")),
+        DRAFT_RETENTION_HOURS=int(os.getenv("DRAFT_RETENTION_HOURS", "6")),
+        PUBLISH_FAILURE_RETENTION_HOURS=int(
+            os.getenv("PUBLISH_FAILURE_RETENTION_HOURS", "24")
+        ),
+        PURGE_SCAN_MAX_FILES=int(os.getenv("PURGE_SCAN_MAX_FILES", "10000")),
+        RETENTION_SWEEP_INTERVAL_SECONDS=int(
+            os.getenv("RETENTION_SWEEP_INTERVAL_SECONDS", "300")
+        ),
+        RETENTION_SWEEP_BATCH_SIZE=int(os.getenv("RETENTION_SWEEP_BATCH_SIZE", "100")),
     )
     cfg.ensure_directories()
     return cfg

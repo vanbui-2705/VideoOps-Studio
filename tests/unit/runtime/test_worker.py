@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from core.application.events import JobClaimed
-from core.application.ports import QueuedWork, QueueStatus
+from core.application.ports import DeferredWork, QueuedWork, QueueStatus
 from core.domain.models import WorkIntent, WorkKind
 from core.runtime.worker import Worker
 
@@ -52,6 +52,14 @@ class AsyncClaimHandler:
 class ObsoleteHandler:
     async def handle(self, work, heartbeat):
         return None
+
+
+class DeferredHandler:
+    def __init__(self, retry_at):
+        self.retry_at = retry_at
+
+    def handle(self, work, heartbeat):
+        return DeferredWork(None, self.retry_at, "PROVIDER_PROCESSING")
 
 
 class FakeProcessor:
@@ -160,3 +168,23 @@ def test_worker_reuses_one_event_loop_for_async_clients() -> None:
         assert worker.run_coroutine(loop_id()) == worker.run_coroutine(loop_id())
     finally:
         worker.close()
+
+
+def test_worker_defers_provider_processing_without_acknowledging() -> None:
+    retry_at = datetime(2026, 11, 16, 10, 0, tzinfo=UTC) + timedelta(seconds=30)
+    queue = FakeQueue(_work())
+    processor = FakeProcessor()
+    worker = Worker(
+        worker_id="worker-a",
+        queue=queue,
+        processor=processor,
+        handlers={WorkKind.PREPARE_STORY: DeferredHandler(retry_at)},
+    )
+
+    worker.run_once()
+
+    assert queue.acked is False
+    assert queue.retried is True
+    assert queue.available_at == retry_at
+    assert queue.error_code == "PROVIDER_PROCESSING"
+    assert processor.applied is False

@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-videoops}
+      POSTGRES_USER: ${POSTGRES_USER:-videoops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-videoops} -d ${POSTGRES_DB:-videoops}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: .
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    environment: &runtime-env
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-videoops}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-videoops}
+      TEMP_DIR: /app/temp
+      GRADIO_SERVER_NAME: 0.0.0.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ui:
+    build: .
+    restart: unless-stopped
+    environment: *runtime-env
+    env_file: [.env]
+    ports: ["7860:7860"]
+    volumes: ["media-workspace:/app/temp"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  story-worker: &worker
+    build: .
+    restart: unless-stopped
+    command: ["python", "run_story_worker.py"]
+    environment: *runtime-env
+    env_file: [.env]
+    volumes: ["media-workspace:/app/temp"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  remix-worker:
+    <<: *worker
+    command: ["python", "run_remix_worker.py"]
+
+  media-worker:
+    <<: *worker
+    command: ["python", "run_preview_worker.py"]
+
+  publish-worker:
+    <<: *worker
+    command: ["python", "run_publish_worker.py"]
+
+  purge-worker:
+    <<: *worker
+    command: ["python", "run_purge_worker.py"]
+
+  retention-sweeper:
+    <<: *worker
+    command: ["python", "run_retention_sweeper.py"]
+
+volumes:
+  postgres-data:
+  media-workspace:

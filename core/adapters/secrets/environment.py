@@ -21,7 +21,7 @@ _YOUTUBE_FIELDS = (
     "YOUTUBE_CLIENT_SECRET",
     "YOUTUBE_REFRESH_TOKEN",
 )
-_TIKTOK_FIELDS = ("TIKTOK_SESSION",)
+_TIKTOK_FIELDS = ("TIKTOK_ACCESS_TOKEN", "TIKTOK_OPEN_ID")
 
 
 class EnvironmentSecretResolver:
@@ -53,7 +53,7 @@ class EnvironmentSecretResolver:
         values = self._bundle(prefix, _TIKTOK_FIELDS)
         if values is None:
             raise CredentialUnavailable("TikTok credential bundle is incomplete")
-        return TikTokCredential(values[0])
+        return TikTokCredential(*values)
 
     def _missing(
         self, reference: str | None, fields: tuple[str, ...]

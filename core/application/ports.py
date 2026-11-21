@@ -7,6 +7,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Protocol
 
+from core.application.events import WorkflowEvent
 from core.domain.models import (
     Platform,
     VideoJob,
@@ -85,6 +86,15 @@ class QueuedWork:
     lease_owner: str | None = None
     lease_until: datetime | None = None
     last_error_code: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DeferredWork:
+    """Ask a worker to persist an optional event and retry the lease later."""
+
+    event: WorkflowEvent | None
+    retry_at: datetime
+    error_code: str
 
 
 class WorkQueue(Protocol):

@@ -75,6 +75,10 @@ class CredentialUnavailable(WorkflowError):
     """Raised when a referenced provider credential bundle is incomplete."""
 
 
+class AuthorizationDenied(WorkflowError):
+    """Raised when an authenticated principal lacks an application action."""
+
+
 class UnsafeWorkspacePath(WorkflowError):
     """Raised when a media path escapes its revision-scoped job workspace."""
 

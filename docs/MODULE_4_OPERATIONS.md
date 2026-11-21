@@ -21,12 +21,13 @@ For `youtube_secret_ref=YT_TECH`, configure:
 
 For `tiktok_secret_ref=TT_TECH`, configure:
 
-- `TT_TECH_TIKTOK_SESSION`
+- `TT_TECH_TIKTOK_ACCESS_TOKEN`
+- `TT_TECH_TIKTOK_OPEN_ID`
 
 The resolver is read-only. Values are never stored in profile JSON, audit entries, Gradio state, or logs. The UI reports only configured/missing status.
 
 ## Administration gate
 
-`CHANNEL_ADMIN_ENABLED=false` is the safe default. Set it to `true` only for a trusted/private deployment with access control in front of Gradio. This flag enables mutations but is not authentication.
+`CHANNEL_ADMIN_ENABLED=false` is the safe default. Set it to `true` only when the authenticated principal has the `ADMIN` role. This flag enables mutations but is not authentication.
 
-Module 4 does not implement OAuth callbacks, cloud secret writes, user accounts, or publishing. Those remain deployment/auth and Module 9 responsibilities.
+Module 4 does not implement OAuth callbacks or cloud secret writes. Module 12 supplies application authentication/authorization; Module 9 consumes credential references through the read-only resolver.

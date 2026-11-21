@@ -1,8 +1,10 @@
 """Public-interface tests for the Gradio application shell."""
 
 import gradio as gr
+import pytest
 
 from app import create_runtime_ui, create_ui
+from config import AppConfig
 
 
 def test_create_ui_returns_blocks_without_dependencies() -> None:
@@ -20,6 +22,16 @@ def test_runtime_ui_falls_back_when_channel_backend_configuration_is_invalid(
     demo = create_runtime_ui()
 
     assert isinstance(demo, gr.Blocks)
+
+
+def test_public_runtime_fails_closed_without_authentication() -> None:
+    with pytest.raises(ValueError, match="authentication"):
+        create_runtime_ui(AppConfig(DEPLOYMENT_MODE="public"))
+
+
+def test_private_runtime_fails_closed_without_authentication() -> None:
+    with pytest.raises(ValueError, match="authentication"):
+        create_runtime_ui(AppConfig(DEPLOYMENT_MODE="private"))
 
 
 def test_ui_exposes_the_four_operator_workspaces() -> None:

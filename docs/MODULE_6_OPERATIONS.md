@@ -68,7 +68,7 @@ Module 6 never renders a master and never publishes.
 - Valid voice, subtitle, visual, and preview files are reused after worker or workflow-commit retry.
 - Size and SHA-256 must still match the manifest before reuse.
 - A corrupt or missing file is rebuilt.
-- Historical manifests remain until a later purge module verifies physical deletion, preventing orphaned files after regeneration.
+- Historical manifests remain until the Module 10 purge worker verifies physical deletion, preventing orphaned files after regeneration.
 - Stale queue work is acknowledged without media side effects.
 
 Expected failures become sanitized `PREVIEW_RENDER` failures with `ResumeAction.PREVIEW`. Raw stderr, absolute workspace paths, narration, API keys, and signed download URLs are excluded from persisted failures and logs.

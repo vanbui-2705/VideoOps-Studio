@@ -14,7 +14,8 @@ def test_complete_bundles_enable_targets_without_exposing_values() -> None:
             "YT_TECH_YOUTUBE_CLIENT_ID": "client-id",
             "YT_TECH_YOUTUBE_CLIENT_SECRET": _MARKER,
             "YT_TECH_YOUTUBE_REFRESH_TOKEN": "refresh-token",
-            "TT_TECH_TIKTOK_SESSION": _MARKER,
+            "TT_TECH_TIKTOK_ACCESS_TOKEN": _MARKER,
+            "TT_TECH_TIKTOK_OPEN_ID": "creator-open-id",
         }
     )
     references = CredentialReferences("YT_TECH", "TT_TECH")

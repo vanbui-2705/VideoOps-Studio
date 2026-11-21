@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: videoops_test
+          POSTGRES_USER: videoops
+          POSTGRES_PASSWORD: videoops_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U videoops -d videoops_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://videoops:videoops_test@localhost:5432/videoops_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install system media tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-noto-core
+      - name: Install project
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Migration round-trip
+        run: python -m alembic upgrade head && python -m alembic downgrade base && python -m alembic upgrade head
+      - name: Ruff
+        run: python -m ruff check . && python -m ruff format --check .
+      - name: Types
+        run: python -m mypy core ui config.py app.py
+      - name: Tests
+        run: python -m pytest -q
+      - name: Compile
+        run: python -m compileall -q core ui config.py app.py run_*_worker.py run_retention_sweeper.py

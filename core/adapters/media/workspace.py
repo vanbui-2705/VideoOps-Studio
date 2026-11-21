@@ -22,7 +22,13 @@ class JobWorkspace:
             if _SAFE_JOB.fullmatch(job_id)
             else hashlib.sha256(job_id.encode("utf-8")).hexdigest()[:32]
         )
-        self.root = Path(temp_root) / "jobs" / safe_job / f"revision-{content_revision}"
+        jobs_root = Path(temp_root) / "jobs"
+        jobs_root.mkdir(parents=True, exist_ok=True)
+        resolved_jobs_root = jobs_root.resolve()
+        self.root = jobs_root / safe_job / f"revision-{content_revision}"
+        resolved_candidate = self.root.resolve(strict=False)
+        if not resolved_candidate.is_relative_to(resolved_jobs_root):
+            raise UnsafeWorkspacePath("Workspace path is unsafe")
         self.root.mkdir(parents=True, exist_ok=True)
         self._resolved_root = self.root.resolve()
 

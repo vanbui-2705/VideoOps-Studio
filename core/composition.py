@@ -6,10 +6,13 @@ import inspect
 import shutil
 import subprocess
 import tempfile
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from sqlalchemy import inspect as sqlalchemy_inspect
@@ -17,7 +20,9 @@ from sqlalchemy import inspect as sqlalchemy_inspect
 from config import AppConfig
 from core.adapters.persistence import (
     PostgresArtifactManifestStore,
+    PostgresAuditStore,
     PostgresChannelRepository,
+    PostgresPublishAttemptStore,
     create_database_engine,
 )
 from core.adapters.persistence.story_generation_store import (
@@ -28,13 +33,19 @@ from core.adapters.persistence.workflow_store import PostgresWorkflowStore
 from core.adapters.secrets import EnvironmentSecretResolver
 from core.application.channel_catalog import DefaultChannelCatalog
 from core.application.master_service import MasterRenderConfig, MasterRenderService
+from core.application.media_ports import StockMediaProvider
 from core.application.preview_service import (
     PreviewPreparationConfig,
     PreviewPreparationService,
 )
+from core.application.publish_coordinator import PublishCoordinator
+from core.application.purge import PurgeCoordinator
 from core.application.remix_service import RemixMediaConfig, RemixMediaService
+from core.application.retention import RetentionSweeper
 from core.application.review_service import ReviewService
+from core.application.security import Action, AuthorizationPolicy, Principal, Role
 from core.application.story_service import StoryScriptService, StoryServiceConfig
+from core.application.submission_service import JobSubmissionService
 from core.application.video_workflow import (
     DefaultVideoWorkflow,
     DefaultWorkflowProcessor,
@@ -44,6 +55,8 @@ from core.llm.contracts import LlmProvider
 from core.llm.errors import LlmConfigurationError
 from core.runtime.master_handler import MasterRenderHandler
 from core.runtime.preview_handler import PreviewRenderHandler
+from core.runtime.publish_handler import PublishTargetHandler
+from core.runtime.purge_handler import PurgeHandler
 from core.runtime.remix_handler import RemixPreparationHandler
 from core.runtime.story_handler import StoryPreparationHandler
 from core.runtime.worker import Worker
@@ -57,6 +70,40 @@ class SystemClock:
 class SystemIds:
     def new_job_id(self) -> str:
         return f"job-{uuid4()}"
+
+
+def validate_security_settings(config: AppConfig) -> None:
+    if config.DEPLOYMENT_MODE not in {"local", "private", "public"}:
+        raise ValueError("DEPLOYMENT_MODE must be local, private, or public")
+    roles = {
+        item.strip().upper()
+        for item in config.APP_AUTH_ROLES.split(",")
+        if item.strip()
+    }
+    if not roles or roles - {role.value for role in Role}:
+        raise ValueError("APP_AUTH_ROLES contains an unsupported role")
+    if config.DEPLOYMENT_MODE in {"private", "public"} and (
+        not config.APP_AUTH_USERNAME
+        or not config.APP_AUTH_PASSWORD
+        or len(config.APP_AUTH_PASSWORD) < 12
+    ):
+        raise ValueError(
+            "Non-local deployment requires strong application authentication"
+        )
+    if config.TRUST_PROXY_AUTH:
+        raise ValueError("Trusted proxy authentication is not implemented")
+
+
+def build_principal(config: AppConfig) -> Principal:
+    validate_security_settings(config)
+    return Principal(
+        config.APP_AUTH_USERNAME or "local-operator",
+        frozenset(
+            Role(item.strip().upper())
+            for item in config.APP_AUTH_ROLES.split(",")
+            if item.strip()
+        ),
+    )
 
 
 def build_review_service(config: AppConfig) -> ReviewService:
@@ -79,6 +126,31 @@ def build_review_service(config: AppConfig) -> ReviewService:
         workflow,
         PostgresArtifactManifestStore(engine),
         config.TEMP_DIR,
+        principal=build_principal(config),
+        authorization=AuthorizationPolicy(),
+    )
+
+
+def build_submission_service(config: AppConfig) -> JobSubmissionService:
+    """Compose the UI submission facade over the durable workflow."""
+    if not config.DATABASE_URL:
+        raise ValueError("DATABASE_URL is required for JobSubmissionService")
+    engine = create_database_engine(
+        config.DATABASE_URL,
+        pool_size=config.DB_POOL_SIZE,
+        max_overflow=config.DB_MAX_OVERFLOW,
+    )
+    workflow = DefaultVideoWorkflow(
+        PostgresWorkflowStore(engine, default_max_attempts=config.WORK_MAX_ATTEMPTS),
+        PostgresChannelRepository(engine),
+        SystemClock(),
+        SystemIds(),
+    )
+    return JobSubmissionService(
+        workflow,
+        max_remix_clips=config.REMIX_MAX_SOURCES,
+        principal=build_principal(config),
+        authorization=AuthorizationPolicy(),
     )
 
 
@@ -88,6 +160,9 @@ def build_channel_catalog(
     environment: Mapping[str, str] | None = None,
 ) -> DefaultChannelCatalog:
     """Compose Module 4 only when a PostgreSQL URL is explicitly configured."""
+    principal = build_principal(config)
+    if config.CHANNEL_ADMIN_ENABLED:
+        AuthorizationPolicy().require(principal, Action.MANAGE_CHANNEL)
     if not config.DATABASE_URL:
         raise ValueError("DATABASE_URL is required for ChannelCatalog")
     engine = create_database_engine(
@@ -288,6 +363,7 @@ def _require_worker_tables(engine: Any) -> None:
         "artifacts",
         "channel_profile_revisions",
         "story_generations",
+        "publish_attempts",
     }
     available_tables = set(sqlalchemy_inspect(engine).get_table_names())
     if required_tables - available_tables:
@@ -445,7 +521,7 @@ def build_preview_worker(config: AppConfig) -> PreviewWorkerRuntime:
         timeout=config.STOCK_REQUEST_TIMEOUT_SECONDS,
         follow_redirects=False,
     )
-    providers = []
+    providers: list[StockMediaProvider] = []
     if config.PEXELS_API_KEY:
         providers.append(PexelsStockProvider(config.PEXELS_API_KEY, client))
     if config.PIXABAY_API_KEY:
@@ -494,3 +570,221 @@ def build_preview_worker(config: AppConfig) -> PreviewWorkerRuntime:
         poll_interval_seconds=config.WORK_POLL_INTERVAL_SECONDS,
     )
     return PreviewWorkerRuntime(worker, client, engine)
+
+
+def validate_publish_settings(config: AppConfig) -> None:
+    """Reject unbounded or unsafe publication settings before leasing work."""
+    tiktok_api = urlparse(config.TIKTOK_API_BASE_URL)
+    if (
+        config.PUBLISH_REQUEST_TIMEOUT_SECONDS <= 0
+        or not 1 <= config.PUBLISH_MAX_ATTEMPTS <= 10
+        or config.PUBLISH_RETRY_BASE_SECONDS < 1
+        or config.YOUTUBE_UPLOAD_CHUNK_BYTES <= 0
+        or config.YOUTUBE_UPLOAD_CHUNK_BYTES % (256 * 1024) != 0
+        or not 0 <= config.YOUTUBE_MAX_CHUNK_RETRIES <= 10
+        or tiktok_api.scheme != "https"
+        or tiktok_api.hostname != "open.tiktokapis.com"
+        or tiktok_api.username is not None
+        or tiktok_api.password is not None
+        or tiktok_api.port not in {None, 443}
+        or config.TIKTOK_STATUS_POLL_SECONDS < 1
+        or config.TIKTOK_STATUS_MAX_POLLS < 1
+        or config.PUBLISH_WORKER_CONCURRENCY != 1
+    ):
+        raise ValueError("Publish settings are invalid")
+
+
+@dataclass(slots=True)
+class PublishWorkerRuntime:
+    worker: Worker
+    http_client: Any
+    engine: Any
+
+    def close(self) -> None:
+        try:
+            self.http_client.close()
+        finally:
+            self.worker.close()
+            self.engine.dispose()
+
+
+def build_publish_worker(config: AppConfig) -> PublishWorkerRuntime:
+    """Compose the serialized official YouTube/TikTok publish worker."""
+    if not config.DATABASE_URL:
+        raise ValueError("DATABASE_URL is required for the publish worker")
+    validate_publish_settings(config)
+    import httpx
+
+    from core.adapters.publish import TikTokPublisher, YoutubePublisher
+
+    engine = create_database_engine(
+        config.DATABASE_URL,
+        pool_size=config.DB_POOL_SIZE,
+        max_overflow=config.DB_MAX_OVERFLOW,
+    )
+    try:
+        _require_worker_tables(engine)
+    except Exception:
+        engine.dispose()
+        raise
+    store = PostgresWorkflowStore(
+        engine, default_max_attempts=config.PUBLISH_MAX_ATTEMPTS
+    )
+    queue = PostgresWorkQueue(engine)
+    processor = DefaultWorkflowProcessor(store, SystemClock())
+    client = httpx.Client(
+        timeout=config.PUBLISH_REQUEST_TIMEOUT_SECONDS,
+        follow_redirects=False,
+    )
+    # Assign by domain platform after construction to keep provider imports local.
+    from core.domain.models import Platform
+
+    coordinator = PublishCoordinator(
+        workflow_store=store,
+        processor=processor,
+        channels=PostgresChannelRepository(engine),
+        secrets=EnvironmentSecretResolver(),
+        manifests=PostgresArtifactManifestStore(engine),
+        attempts=PostgresPublishAttemptStore(engine),
+        publishers={
+            Platform.YOUTUBE: YoutubePublisher(
+                chunk_bytes=config.YOUTUBE_UPLOAD_CHUNK_BYTES,
+                max_chunk_retries=config.YOUTUBE_MAX_CHUNK_RETRIES,
+                retry_base_seconds=config.PUBLISH_RETRY_BASE_SECONDS,
+            ),
+            Platform.TIKTOK: TikTokPublisher(
+                client,
+                api_base_url=config.TIKTOK_API_BASE_URL,
+                status_poll_seconds=config.TIKTOK_STATUS_POLL_SECONDS,
+            ),
+        },
+        temp_root=config.TEMP_DIR,
+        max_status_polls=config.TIKTOK_STATUS_MAX_POLLS,
+    )
+    worker = Worker(
+        worker_id=f"{config.WORKER_ID}-publish",
+        queue=queue,
+        processor=processor,
+        handlers={
+            WorkKind.PUBLISH_TARGET: PublishTargetHandler(coordinator),
+            WorkKind.RECONCILE_TARGET: PublishTargetHandler(
+                coordinator, reconcile=True
+            ),
+        },
+        lease_seconds=config.WORK_LEASE_SECONDS,
+        poll_interval_seconds=config.WORK_POLL_INTERVAL_SECONDS,
+        retry_base_seconds=int(config.PUBLISH_RETRY_BASE_SECONDS),
+    )
+    return PublishWorkerRuntime(worker, client, engine)
+
+
+@dataclass(slots=True)
+class PurgeWorkerRuntime:
+    worker: Worker
+    engine: Any
+
+    def close(self) -> None:
+        self.worker.close()
+        self.engine.dispose()
+
+
+def validate_purge_settings(config: AppConfig) -> None:
+    if (
+        config.PURGE_WORKER_CONCURRENCY != 1
+        or not 1 <= config.PURGE_MAX_ATTEMPTS <= 10
+        or config.PURGE_RETRY_BASE_SECONDS < 1
+        or config.DRAFT_RETENTION_HOURS < 1
+        or config.PUBLISH_FAILURE_RETENTION_HOURS < config.DRAFT_RETENTION_HOURS
+        or config.PURGE_SCAN_MAX_FILES < 1
+        or config.RETENTION_SWEEP_INTERVAL_SECONDS < 1
+        or config.RETENTION_SWEEP_BATCH_SIZE < 1
+    ):
+        raise ValueError("Purge settings are invalid")
+
+
+def build_purge_worker(config: AppConfig) -> PurgeWorkerRuntime:
+    """Compose the serialized, contained zero-retention worker."""
+    if not config.DATABASE_URL:
+        raise ValueError("DATABASE_URL is required for the purge worker")
+    validate_purge_settings(config)
+    from core.adapters.purge import WorkspacePurger
+
+    engine = create_database_engine(
+        config.DATABASE_URL,
+        pool_size=config.DB_POOL_SIZE,
+        max_overflow=config.DB_MAX_OVERFLOW,
+    )
+    try:
+        _require_worker_tables(engine)
+    except Exception:
+        engine.dispose()
+        raise
+    store = PostgresWorkflowStore(
+        engine, default_max_attempts=config.PURGE_MAX_ATTEMPTS
+    )
+    processor = DefaultWorkflowProcessor(store, SystemClock())
+    coordinator = PurgeCoordinator(
+        store,
+        PostgresAuditStore(engine),
+        WorkspacePurger(config.TEMP_DIR, max_files=config.PURGE_SCAN_MAX_FILES),
+        retry_base_seconds=config.PURGE_RETRY_BASE_SECONDS,
+    )
+    worker = Worker(
+        worker_id=f"{config.WORKER_ID}-purge",
+        queue=PostgresWorkQueue(engine),
+        processor=processor,
+        handlers={WorkKind.PURGE_JOB: PurgeHandler(coordinator)},
+        lease_seconds=config.WORK_LEASE_SECONDS,
+        poll_interval_seconds=config.WORK_POLL_INTERVAL_SECONDS,
+        retry_base_seconds=config.PURGE_RETRY_BASE_SECONDS,
+    )
+    return PurgeWorkerRuntime(worker, engine)
+
+
+@dataclass(slots=True)
+class RetentionSweeperRuntime:
+    sweeper: RetentionSweeper
+    interval_seconds: int
+    engine: Any
+    _stop: threading.Event = dataclass_field(default_factory=threading.Event)
+
+    def run_forever(self) -> None:
+        while not self._stop.is_set():
+            self.sweeper.run_once()
+            self._stop.wait(self.interval_seconds)
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def close(self) -> None:
+        self.engine.dispose()
+
+
+def build_retention_sweeper(config: AppConfig) -> RetentionSweeperRuntime:
+    if not config.DATABASE_URL:
+        raise ValueError("DATABASE_URL is required for the retention sweeper")
+    validate_purge_settings(config)
+    engine = create_database_engine(
+        config.DATABASE_URL,
+        pool_size=config.DB_POOL_SIZE,
+        max_overflow=config.DB_MAX_OVERFLOW,
+    )
+    store = PostgresWorkflowStore(
+        engine, default_max_attempts=config.PURGE_MAX_ATTEMPTS
+    )
+    workflow = DefaultVideoWorkflow(
+        store,
+        PostgresChannelRepository(engine),
+        SystemClock(),
+        SystemIds(),
+    )
+    sweeper = RetentionSweeper(
+        store,
+        workflow,
+        draft_retention_hours=config.DRAFT_RETENTION_HOURS,
+        publish_failure_retention_hours=config.PUBLISH_FAILURE_RETENTION_HOURS,
+        batch_size=config.RETENTION_SWEEP_BATCH_SIZE,
+    )
+    return RetentionSweeperRuntime(
+        sweeper, config.RETENTION_SWEEP_INTERVAL_SECONDS, engine
+    )

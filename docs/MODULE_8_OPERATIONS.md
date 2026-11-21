@@ -33,7 +33,7 @@ Start the UI and shared media worker:
 4. Use **Dựng lại** with non-empty instructions to create a new content revision and preview.
 5. Select at least one available target and choose **Duyệt & dựng master**.
 
-Refresh is read-only. The facade accepts a preview only when its manifest belongs to the current job/revision and its contained file still matches byte size and SHA-256. Cancellation remains disabled until the purge worker exists.
+Refresh is read-only. The facade accepts a preview only when its manifest belongs to the current job/revision and its contained file still matches byte size and SHA-256. Cancellation is enabled through `ReviewService` and schedules the verified Module 10 purge path.
 
 ## Master policy
 

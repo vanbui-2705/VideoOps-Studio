@@ -1,8 +1,10 @@
-"""Composition root for the Gradio presentation module."""
+"""Composition root for the Gradio operator interface."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
+from uuid import uuid4
 
 import gradio as gr
 
@@ -13,10 +15,14 @@ from ui.channel_handlers import (
 )
 from ui.review_handlers import (
     approve_review,
+    cancel_review,
     load_review,
     regenerate_review,
+    retry_publish,
     save_metadata,
+    skip_publish_target,
 )
+from ui.submission_handlers import refresh_job, submit_remix, submit_story
 
 _CSS_PATH = Path(__file__).with_name("styles.css")
 _APP_CSS = _CSS_PATH.read_text(encoding="utf-8")
@@ -24,7 +30,6 @@ _GRADIO_MAJOR_VERSION = int(gr.__version__.split(".", maxsplit=1)[0])
 
 
 def _theme() -> gr.Theme:
-    """Return the restrained operator-console theme used by the application."""
     return gr.themes.Base(
         primary_hue=gr.themes.colors.emerald,
         secondary_hue=gr.themes.colors.teal,
@@ -34,149 +39,160 @@ def _theme() -> gr.Theme:
     )
 
 
-def _blocks_style_options() -> dict[str, object]:
-    """Keep the shell compatible with Gradio 4/5 and warning-free on Gradio 6."""
+def _blocks_style_options() -> dict[str, Any]:
     if _GRADIO_MAJOR_VERSION >= 6:
         return {}
     return {"theme": _theme(), "css": _APP_CSS}
 
 
 def _section_intro(title: str, description: str) -> None:
-    gr.HTML(
-        f"""
-        <div class="section-intro">
-          <h2>{title}</h2>
-          <p>{description}</p>
-        </div>
-        """
+    gr.HTML(f'<div class="section-intro"><h2>{title}</h2><p>{description}</p></div>')
+
+
+def _metadata_fields(prefix: str):
+    title = gr.Textbox(label=f"{prefix} · Tiêu đề")
+    description = gr.Textbox(label="Mô tả", lines=3)
+    tags = gr.Textbox(label="Tags", placeholder="AI, công nghệ")
+    privacy = gr.Dropdown(
+        choices=["private", "unlisted", "public"],
+        value="private",
+        label="Privacy",
     )
+    return title, description, tags, privacy
 
 
-def _build_story_workspace() -> None:
+def _job_monitor(service, initial_job_id):
+    with gr.Row():
+        job_id = gr.Textbox(label="Job ID", value=initial_job_id)
+        refresh = gr.Button("Làm mới trạng thái", interactive=service is not None)
+    status = gr.Textbox(label="Trạng thái job", interactive=False)
+    refresh.click(
+        lambda value: refresh_job(service, value), inputs=[job_id], outputs=[status]
+    )
+    return job_id, status
+
+
+def _build_story_workspace(service, active_channel) -> None:
     _section_intro(
         "Tạo video từ nội dung",
-        "Chuẩn bị script hoặc chủ đề. Pipeline sẽ tạo voice, subtitle, stock và preview.",
+        "Gửi script hoặc chủ đề vào durable workflow; render tiếp tục ở worker nền.",
     )
+    request_id = gr.State(value=str(uuid4()))
     with gr.Row(equal_height=False):
         with gr.Column(scale=7, elem_classes="workspace-panel"):
-            gr.Radio(
+            source = gr.Radio(
                 choices=["Script hoàn chỉnh", "Chủ đề / Prompt"],
                 value="Script hoàn chỉnh",
                 label="Nguồn nội dung",
             )
-            gr.Textbox(
-                label="Script hoặc chủ đề",
-                placeholder="Dán script hoặc mô tả chủ đề cần sản xuất...",
-                lines=12,
-                max_lines=20,
-            )
-            with gr.Row():
-                gr.Textbox(label="Từ khóa hình ảnh", placeholder="AI, chip, datacenter")
-                gr.Dropdown(
-                    choices=["Theo Channel Profile"],
-                    value="Theo Channel Profile",
-                    label="Giọng đọc",
-                )
+            content = gr.Textbox(label="Nội dung", lines=12, max_lines=20)
+            title, description, tags, privacy = _metadata_fields("Story")
         with gr.Column(scale=3, elem_classes="workspace-panel"):
             gr.Markdown("### Render preset")
-            gr.Textbox(label="Tỷ lệ", value="Theo Channel Profile", interactive=False)
-            gr.Textbox(label="Preview", value="480p · ultrafast", interactive=False)
-            gr.Textbox(label="Master", value="1080p · sau khi duyệt", interactive=False)
-            gr.Button(
+            gr.Textbox(value="Theo Channel Profile", label="Tỷ lệ", interactive=False)
+            gr.Textbox(value="480p", label="Preview", interactive=False)
+            submit = gr.Button(
                 "Tạo Preview",
                 variant="primary",
-                interactive=False,
-                elem_classes="primary-action",
+                interactive=service is not None,
             )
-            gr.Markdown("*Đang chờ kết nối `VideoWorkflow`.*")
+            created_job, status = _job_monitor(service, "")
+    submit.click(
+        lambda *values: submit_story(service, *values),
+        inputs=[
+            request_id,
+            active_channel,
+            source,
+            content,
+            title,
+            description,
+            tags,
+            privacy,
+        ],
+        outputs=[status, created_job, request_id],
+    )
 
 
-def _build_remix_workspace() -> None:
+def _build_remix_workspace(service, active_channel) -> None:
     _section_intro(
         "Biên tập từ nguồn có sẵn",
-        "Khai báo URL và thông số clip. Worker sẽ tải, chuẩn hóa và dựng preview trên cloud.",
+        "Khai báo nguồn và mốc cắt; worker thực hiện tải và chuẩn hóa ở nền.",
     )
-    with gr.Column(elem_classes="workspace-panel"):
-        gr.Dataframe(
-            value=[["", 0, 30, 1.0]],
-            headers=["URL nguồn", "Bắt đầu (giây)", "Kết thúc (giây)", "Tốc độ"],
-            datatype=["str", "number", "number", "number"],
-            row_count=1,
-            column_count=4,
-            interactive=True,
-            wrap=True,
-            label="Danh sách clip",
-        )
-        with gr.Row():
-            gr.Dropdown(
-                choices=["Theo Channel Profile", "16:9", "9:16"],
-                value="Theo Channel Profile",
-                label="Tỷ lệ đầu ra",
-            )
-            gr.Dropdown(
-                choices=["Fit + nền", "Crop giữa", "Crop tùy chỉnh"],
-                value="Fit + nền",
-                label="Xử lý khung hình",
-            )
-            gr.Checkbox(label="Giữ âm thanh nguồn", value=True)
-        gr.Checkbox(
-            label="Tôi xác nhận có quyền sử dụng các nguồn nội dung trên",
-            value=False,
-        )
-        gr.Button(
-            "Tạo Preview Remix",
-            variant="primary",
-            interactive=False,
-            elem_classes="primary-action",
-        )
+    request_id = gr.State(value=str(uuid4()))
+    rows = gr.Dataframe(
+        value=[["", 0, 30, 1.0, "fill", False]],
+        headers=["URL", "Bắt đầu", "Kết thúc", "Tốc độ", "Crop", "Mirror"],
+        datatype=["str", "number", "number", "number", "str", "bool"],
+        row_count=1,
+        column_count=6,
+        interactive=True,
+        label="Danh sách clip",
+    )
+    copyright_confirmed = gr.Checkbox(
+        label="Tôi xác nhận có quyền sử dụng các nguồn nội dung trên"
+    )
+    title, description, tags, privacy = _metadata_fields("Remix")
+    submit = gr.Button(
+        "Tạo Preview Remix", variant="primary", interactive=service is not None
+    )
+    created_job, status = _job_monitor(service, "")
+    submit.click(
+        lambda *values: submit_remix(service, *values),
+        inputs=[
+            request_id,
+            active_channel,
+            rows,
+            copyright_confirmed,
+            title,
+            description,
+            tags,
+            privacy,
+        ],
+        outputs=[status, created_job, request_id],
+    )
 
 
-def _build_review_workspace(review: object | None) -> None:
-    """Build the connected review gate while cancellation remains locked."""
+def _build_review_workspace(review) -> None:
     _section_intro(
         "Review Gate",
-        "Kiểm tra preview và khóa metadata trước khi dựng master 1080p.",
+        "Kiểm tra preview, khóa metadata và theo dõi kết quả xuất bản từng nền tảng.",
     )
     revision = gr.State(value=None)
     with gr.Row():
-        job_id = gr.Textbox(label="Job ID", placeholder="Nhập Job ID cần review")
+        job_id = gr.Textbox(label="Job ID")
         load_button = gr.Button("Tải / Làm mới", interactive=review is not None)
     with gr.Row(equal_height=False):
         with gr.Column(scale=6, elem_classes="preview-panel"):
             preview = gr.Video(label="Preview 480p", interactive=False, height=430)
-            status = gr.Textbox(
-                label="Trạng thái pipeline",
-                value="Chưa có job đang review.",
-                interactive=False,
-            )
-            content_revision = gr.Textbox(
-                label="Content revision", value="—", interactive=False
+            status = gr.Textbox(label="Trạng thái pipeline", interactive=False)
+            content_revision = gr.Textbox(label="Content revision", interactive=False)
+            publish_targets = gr.Markdown("Chưa có publishing target.")
+            manual_master = gr.File(
+                label="Master dự phòng để đăng TikTok thủ công", interactive=False
             )
         with gr.Column(scale=4, elem_classes="workspace-panel"):
-            title = gr.Textbox(label="Tiêu đề", placeholder="Tiêu đề video")
-            description = gr.Textbox(label="Mô tả", lines=5, placeholder="Mô tả video")
-            tags = gr.Textbox(label="Tags", placeholder="tag-1, tag-2")
-            with gr.Row():
-                category = gr.Textbox(label="Category", value="28")
-                privacy = gr.Dropdown(
-                    choices=["private", "unlisted", "public"],
-                    value="private",
-                    label="Privacy",
-                )
+            title = gr.Textbox(label="Tiêu đề")
+            description = gr.Textbox(label="Mô tả", lines=5)
+            tags = gr.Textbox(label="Tags")
+            category = gr.Textbox(label="Category", value="28")
+            privacy = gr.Dropdown(
+                choices=["private", "unlisted", "public"],
+                value="private",
+                label="Privacy",
+            )
             targets = gr.CheckboxGroup(choices=[], label="Nền tảng đích")
             save_button = gr.Button("Lưu metadata", interactive=False)
-            changes = gr.Textbox(
-                label="Yêu cầu dựng lại", placeholder="Mô tả thay đổi cần áp dụng"
-            )
-            with gr.Row():
-                regenerate_button = gr.Button("Dựng lại", interactive=False)
-                gr.Button("Hủy job", variant="stop", interactive=False)
+            changes = gr.Textbox(label="Yêu cầu dựng lại")
+            regenerate_button = gr.Button("Dựng lại", interactive=False)
             approve_button = gr.Button(
-                "Duyệt & dựng master",
-                variant="primary",
-                interactive=False,
-                elem_classes="primary-action",
+                "Duyệt & dựng master", variant="primary", interactive=False
             )
+            cancel_reason = gr.Textbox(label="Lý do hủy")
+            cancel_button = gr.Button("Hủy job", variant="stop", interactive=False)
+            failed_target = gr.Dropdown(choices=[], label="Target lỗi")
+            skip_reason = gr.Textbox(label="Lý do bỏ qua target")
+            retry_button = gr.Button("Retry / Reconcile", interactive=False)
+            skip_button = gr.Button("Bỏ qua target", interactive=False)
 
     load_button.click(
         lambda value: load_review(review, value),
@@ -195,6 +211,12 @@ def _build_review_workspace(review: object | None) -> None:
             save_button,
             regenerate_button,
             approve_button,
+            cancel_button,
+            publish_targets,
+            failed_target,
+            manual_master,
+            retry_button,
+            skip_button,
         ],
     )
     metadata_inputs = [
@@ -221,89 +243,64 @@ def _build_review_workspace(review: object | None) -> None:
         inputs=[*metadata_inputs, targets],
         outputs=[status, revision],
     )
+    cancel_button.click(
+        lambda *values: cancel_review(review, *values),
+        inputs=[job_id, revision, cancel_reason],
+        outputs=[status, revision],
+    )
+    retry_button.click(
+        lambda *values: retry_publish(review, *values),
+        inputs=[job_id, revision],
+        outputs=[status, revision],
+    )
+    skip_button.click(
+        lambda *values: skip_publish_target(review, *values),
+        inputs=[job_id, revision, failed_target, skip_reason],
+        outputs=[status, revision],
+    )
 
 
-def _build_channel_workspace(
-    channels: object | None,
-    *,
-    admin_enabled: bool,
-    choices: list[tuple[str, str]],
-) -> None:
+def _build_channel_workspace(channels, *, admin_enabled, choices) -> None:
     _section_intro(
         "Channel Profile",
-        "Manage safe production presets and credential references. Secret values remain in the deployment environment.",
+        "Quản lý preset và credential reference; secret values không xuất hiện trong UI.",
     )
     revision = gr.State(value=None)
     selector = gr.Dropdown(
-        choices=choices,
-        label="Channel Profile",
-        interactive=channels is not None,
+        choices=choices, label="Channel Profile", interactive=channels is not None
     )
-    with gr.Row(equal_height=False):
-        with gr.Column(scale=6, elem_classes="workspace-panel"):
-            with gr.Row():
-                channel_id = gr.Textbox(label="Channel ID", placeholder="tech_vn")
-                name = gr.Textbox(label="Display name", placeholder="Tech Việt Nam")
-            with gr.Row():
-                niche = gr.Textbox(label="Niche", placeholder="technology")
-                language = gr.Textbox(label="Language", value="vi-VN")
-                enabled = gr.Checkbox(label="Enabled", value=True)
-            persona = gr.Textbox(label="Persona", lines=3)
-            tone = gr.Textbox(label="Tone", placeholder="informative")
-            prompt_template = gr.Textbox(
-                label="Prompt template", lines=4, placeholder="Write about {input}"
-            )
-            with gr.Row():
-                aspect_ratio = gr.Dropdown(
-                    choices=["16:9", "9:16"], value="16:9", label="Aspect ratio"
-                )
-                voice = gr.Textbox(label="Voice", placeholder="vi-VN-NamMinhNeural")
-                rate_percent = gr.Number(label="Rate %", value=0, precision=0)
-            with gr.Row():
-                bgm_ref = gr.Textbox(label="BGM preset", placeholder="tech-calm")
-                ducking_db = gr.Number(label="Ducking dB", value=-12)
-            title_template = gr.Textbox(label="Title template", value="{input}")
-            description_template = gr.Textbox(label="Description template", lines=3)
-            hashtags = gr.Textbox(label="Hashtags", placeholder="AI, Tech")
-            with gr.Row():
-                category_id = gr.Textbox(label="Category", value="28")
-                privacy = gr.Dropdown(
-                    choices=["private", "unlisted", "public"],
-                    value="private",
-                    label="Privacy",
-                )
-        with gr.Column(scale=4, elem_classes="workspace-panel danger-zone"):
-            gr.Markdown("### Credential references")
-            youtube_ref = gr.Textbox(
-                label="YouTube secret reference", placeholder="YT_TECH"
-            )
-            tiktok_ref = gr.Textbox(
-                label="TikTok secret reference", placeholder="TT_TECH"
-            )
-            credential_status = gr.Textbox(
-                label="Credential status",
-                value="Select a Channel Profile",
-                interactive=False,
-            )
-            gr.Markdown(
-                "Provider values are configured in the deployment secret manager and are never displayed or written here."
-            )
-            save_status = gr.Textbox(
-                label="Save status",
-                value=(
-                    "Editing enabled for trusted deployment"
-                    if admin_enabled
-                    else "Read-only: CHANNEL_ADMIN_ENABLED=false"
-                ),
-                interactive=False,
-            )
-            save_button = gr.Button(
-                "Save Channel Profile",
-                variant="primary",
-                interactive=channels is not None and admin_enabled,
-            )
-
-    form_outputs = [
+    channel_id = gr.Textbox(label="Channel ID")
+    name = gr.Textbox(label="Display name")
+    niche = gr.Textbox(label="Niche")
+    language = gr.Textbox(label="Language", value="vi-VN")
+    persona = gr.Textbox(label="Persona")
+    tone = gr.Textbox(label="Tone")
+    prompt_template = gr.Textbox(label="Prompt template")
+    aspect_ratio = gr.Dropdown(
+        choices=["16:9", "9:16"], value="16:9", label="Aspect ratio"
+    )
+    voice = gr.Textbox(label="Voice")
+    rate_percent = gr.Number(label="Rate %", value=0, precision=0)
+    bgm_ref = gr.Textbox(label="BGM preset")
+    ducking_db = gr.Number(label="Ducking dB", value=-12)
+    title_template = gr.Textbox(label="Title template", value="{input}")
+    description_template = gr.Textbox(label="Description template")
+    hashtags = gr.Textbox(label="Hashtags")
+    category_id = gr.Textbox(label="Category", value="28")
+    privacy = gr.Dropdown(
+        choices=["private", "unlisted", "public"], value="private", label="Privacy"
+    )
+    youtube_ref = gr.Textbox(label="YouTube secret reference")
+    tiktok_ref = gr.Textbox(label="TikTok secret reference")
+    enabled = gr.Checkbox(label="Enabled", value=True)
+    credential_status = gr.Textbox(label="Credential status", interactive=False)
+    save_status = gr.Textbox(label="Save status", interactive=False)
+    save_button = gr.Button(
+        "Save Channel Profile",
+        variant="primary",
+        interactive=channels is not None and admin_enabled,
+    )
+    outputs = [
         channel_id,
         name,
         niche,
@@ -330,11 +327,11 @@ def _build_channel_workspace(
     selector.change(
         lambda selected: load_channel_form(channels, selected),
         inputs=[selector],
-        outputs=form_outputs,
+        outputs=outputs,
     )
     save_button.click(
         lambda *values: save_channel_form(channels, *values),
-        inputs=form_outputs[:-1],
+        inputs=outputs[:-1],
         outputs=[save_status, revision],
     )
 
@@ -346,90 +343,54 @@ def create_ui(
     *,
     channel_admin_enabled: bool = False,
 ) -> gr.Blocks:
-    """Build an import-safe UI shell around injected application interfaces."""
-    backend_ready = review is not None and channels is not None
-    channels_ready = channels is not None
     channel_choices, channel_status = list_channel_choices(channels, enabled_only=True)
-
-    def refresh_channel_components():
-        refreshed_choices, refreshed_status = list_channel_choices(
-            channels, enabled_only=True
+    with (
+        gr.Blocks(
+            title="VideoOps Studio", fill_width=True, **_blocks_style_options()
+        ) as demo,
+        gr.Column(elem_classes="app-shell"),
+    ):
+        gr.HTML(
+            '<header class="studio-header"><div><h1 class="studio-title">'
+            'VideoOps Studio</h1><p class="studio-subtitle">'
+            "Tạo, duyệt và phát hành video đa kênh.</p></div></header>"
         )
-        return gr.Dropdown(choices=refreshed_choices), refreshed_status
-
-    with gr.Blocks(
-        title="VideoOps Studio",
-        fill_width=True,
-        **_blocks_style_options(),
-    ) as demo:
-        gr.State(value=None)
-        gr.State(value=None)
-        gr.State(value=None)
-
-        with gr.Column(elem_classes="app-shell"):
-            gr.HTML(
-                f"""
-                <header class="studio-header">
-                  <div>
-                    <div class="studio-eyebrow">Cloud production workspace</div>
-                    <h1 class="studio-title">VideoOps Studio</h1>
-                    <p class="studio-subtitle">Tạo, duyệt và phát hành video đa kênh trong một luồng kiểm soát.</p>
-                  </div>
-                  <div class="runtime-badge">{"Backend connected" if backend_ready else "UI preview mode"}</div>
-                </header>
-                """
+        with gr.Row(elem_classes="control-bar"):
+            active_channel = gr.Dropdown(
+                choices=channel_choices,
+                label="Channel đang hoạt động",
+                interactive=channels is not None,
+            )
+            profile_status = gr.Textbox(
+                value=channel_status, label="Profile status", interactive=False
             )
 
-            with gr.Row(elem_classes="control-bar"):
-                active_channel = gr.Dropdown(
-                    choices=channel_choices,
-                    label="Channel đang hoạt động",
-                    info="Preset nội dung, render và tài khoản đăng",
-                    scale=5,
-                    interactive=channels_ready,
-                )
-                profile_status = gr.Textbox(
-                    value=channel_status,
-                    label="Profile status",
-                    scale=3,
-                    interactive=False,
-                )
-                refresh_channels = gr.Button(
-                    "Làm mới", scale=1, interactive=channels_ready
-                )
-                refresh_channels.click(
-                    refresh_channel_components,
-                    outputs=[active_channel, profile_status],
-                )
+            def refresh_channels():
+                choices, status = list_channel_choices(channels, enabled_only=True)
+                return gr.Dropdown(choices=choices), status
 
-            with gr.Tabs():
-                with gr.Tab("AI Story"):
-                    _build_story_workspace()
-                with gr.Tab("Video Remix"):
-                    _build_remix_workspace()
-                with gr.Tab("Review & Publish"):
-                    _build_review_workspace(review)
-                with gr.Tab("Channel & Credentials"):
-                    _build_channel_workspace(
-                        channels,
-                        admin_enabled=channel_admin_enabled,
-                        choices=list_channel_choices(channels)[0],
-                    )
-
-            gr.HTML(
-                """
-                <footer class="studio-subtitle">
-                  V0 layout · backend actions remain locked until VideoWorkflow and ChannelCatalog are connected.
-                </footer>
-                """
-            )
-
+            refresh = gr.Button("Làm mới", interactive=channels is not None)
+            refresh.click(refresh_channels, outputs=[active_channel, profile_status])
+        with gr.Tabs():
+            with gr.Tab("AI Story"):
+                _build_story_workspace(workflow, active_channel)
+            with gr.Tab("Video Remix"):
+                _build_remix_workspace(workflow, active_channel)
+            with gr.Tab("Review & Publish"):
+                _build_review_workspace(review)
+            with gr.Tab("Channel & Credentials"):
+                _build_channel_workspace(
+                    channels,
+                    admin_enabled=channel_admin_enabled,
+                    choices=list_channel_choices(channels)[0],
+                )
     return demo
 
 
-def launch_ui(demo: gr.Blocks) -> None:
-    """Launch the queued UI with version-appropriate style configuration."""
-    launch_options: dict[str, object] = {}
+def launch_ui(demo: gr.Blocks, *, auth=None) -> None:
+    options: dict[str, object] = {}
     if _GRADIO_MAJOR_VERSION >= 6:
-        launch_options = {"theme": _theme(), "css": _APP_CSS}
-    demo.queue().launch(**launch_options)
+        options = {"theme": _theme(), "css": _APP_CSS}
+    if auth is not None:
+        options["auth"] = auth
+    demo.queue().launch(**options)

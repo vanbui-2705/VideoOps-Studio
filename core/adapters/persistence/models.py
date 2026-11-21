@@ -175,11 +175,18 @@ class PublishAttemptRow(Base):
         String(256), unique=True, nullable=False
     )
     external_id: Mapped[str | None] = mapped_column(String(256))
+    public_url: Mapped[str | None] = mapped_column(Text)
     response_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    provider_operation_id: Mapped[str | None] = mapped_column(String(256))
+    error_code: Mapped[str | None] = mapped_column(String(128))
+    retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class AuditEntryRow(Base):

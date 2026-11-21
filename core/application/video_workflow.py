@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
-from typing import Protocol
+from typing import Any, Protocol
 
 from core.application.commands import (
     Approve,
@@ -53,6 +53,7 @@ from core.domain.models import (
     PublishTarget,
     RemixClipSnapshot,
     RemixSnapshot,
+    RequestSnapshot,
     ResumeAction,
     StorySnapshot,
     TargetStatus,
@@ -107,6 +108,7 @@ class DefaultVideoWorkflow:
             raise ChannelNotFound(request.channel_id)
 
         now = self._clock.now()
+        request_snapshot: RequestSnapshot
         if isinstance(request, StoryRequest):
             job_type = JobType.STORY
             work_kind = WorkKind.PREPARE_STORY
@@ -190,6 +192,7 @@ class DefaultVideoWorkflow:
             decision = self._skip_target(job, command)
         else:
             raise DomainValidationError("Unsupported workflow command")
+        decision = replace(decision, actor_id=command.actor_id)
         committed = self._store.commit(decision, command.expected_revision)
         return project_job(committed)
 
@@ -403,6 +406,7 @@ class DefaultVideoWorkflow:
             raise DomainValidationError("Publish target is not part of this job")
 
         all_terminal = all_publish_targets_terminal(tuple(targets))
+        work: tuple[WorkIntent, ...]
         if all_terminal:
             updated = transition(
                 job,
@@ -735,7 +739,7 @@ class DefaultWorkflowProcessor:
         )
         return project_job(committed)
 
-    def _mutate(self, job: VideoJob, **changes: object) -> VideoJob:
+    def _mutate(self, job: VideoJob, **changes: Any) -> VideoJob:
         return replace(
             job,
             revision=job.revision + 1,

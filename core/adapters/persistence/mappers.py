@@ -18,6 +18,7 @@ from core.domain.models import (
     PublishTarget,
     RemixClipSnapshot,
     RemixSnapshot,
+    RequestSnapshot,
     ResumeAction,
     StorySnapshot,
     TargetStatus,
@@ -149,7 +150,7 @@ def job_to_dict(job: VideoJob) -> dict[str, Any]:
 
 def job_from_dict(data: dict[str, Any]) -> VideoJob:
     request_data = data.get("request_snapshot")
-    request = None
+    request: RequestSnapshot | None = None
     if request_data and request_data["type"] == "STORY":
         request = StorySnapshot(request_data.get("script"), request_data.get("prompt"))
     elif request_data:

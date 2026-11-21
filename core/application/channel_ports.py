@@ -40,7 +40,8 @@ class YoutubeCredential:
 
 @dataclass(frozen=True, slots=True)
 class TikTokCredential:
-    session_value: str = field(repr=False)
+    access_token: str = field(repr=False)
+    open_id: str = field(repr=False)
 
 
 class SecretResolver(Protocol):

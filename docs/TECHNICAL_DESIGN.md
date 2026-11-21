@@ -11,6 +11,8 @@
 
 > Đây là thiết kế mục tiêu (TO-BE), không phải mô tả đầy đủ code hiện tại. Khi có xung đột, BA đã được duyệt và ADR đã được chấp thuận là nguồn quyết định cao hơn tài liệu này.
 
+> **Implementation status (Modules 3-13):** the as-built runtime uses PostgreSQL, separate durable workers, official provider APIs, verified purge, application authentication/roles, and the container topology documented in `README.md` and `docs/MODULE_9_OPERATIONS.md` through `docs/MODULE_13_DEPLOYMENT.md`. Earlier SQLite/single-worker passages below are retained as design history and are superseded by those operations guides.
+
 ---
 
 ## 1. Mục tiêu thiết kế
@@ -477,7 +479,8 @@ GEMINI_API_KEY
 <SECRET_REF>_YOUTUBE_CLIENT_ID
 <SECRET_REF>_YOUTUBE_CLIENT_SECRET
 <SECRET_REF>_YOUTUBE_REFRESH_TOKEN
-<SECRET_REF>_TIKTOK_SESSION
+<SECRET_REF>_TIKTOK_ACCESS_TOKEN
+<SECRET_REF>_TIKTOK_OPEN_ID
 ```
 
 `.env.example` chỉ chứa tên và giá trị mẫu vô hại. Production secret được inject bởi Hugging Face Secrets hoặc secret manager.
@@ -560,4 +563,3 @@ CI cài FFmpeg thật. API ngoài luôn mock; contract test online chạy thủ 
 8. **Hardening:** restart recovery, security, soak tests, CI và deployment runbook.
 
 Mỗi slice chỉ hoàn tất khi test interface, lint, type check và purge safety liên quan đều đạt.
-
